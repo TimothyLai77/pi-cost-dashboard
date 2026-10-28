@@ -23,21 +23,6 @@ const MONEY = "var(--money)";
 const VOLUME = "var(--volume)";
 
 /**
- * Human name for a timezone offset the chart is bucketing by.
- * @param {number} minutes Minutes east of UTC
- * @returns {string} "UTC", "UTC+2", or "UTC-4:30"
- */
-const offsetLabel = (minutes) => {
-  const value = Number(minutes) || 0;
-  if (value === 0) return "UTC";
-  const sign = value > 0 ? "+" : "-";
-  const abs = Math.abs(value);
-  const hours = Math.trunc(abs / 60);
-  const rest = abs % 60;
-  return `UTC${sign}${hours}${rest > 0 ? `:${String(rest).padStart(2, "0")}` : ""}`;
-};
-
-/**
  * Tooltip over one hour: spend, volume, and how many sessions billed in it.
  * @param {{ active?: boolean, payload?: any[] }} props
  * @returns {JSX.Element | null}
@@ -65,14 +50,14 @@ const HourTooltip = ({ active, payload }) => {
 };
 
 /**
- * @param {{ points: { hour: string, label: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[], day: string, tzOffsetMinutes?: number }} props
+ * @param {{ points: { hour: string, label: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[], day: string, timeZone?: string, offsetLabel?: string }} props
  * @returns {JSX.Element}
  */
-export const HourChart = ({ points, day, tzOffsetMinutes = 0 }) => {
+export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC" }) => {
   const busiestHour = points.reduce((max, point) => Math.max(max, point.totalTokens), 0);
   const billedHours = points.filter((point) => point.costMicros > 0).length;
   const activeHours = points.filter((point) => point.totalTokens > 0).length;
-  const zone = offsetLabel(tzOffsetMinutes);
+  const zone = `${timeZone} ${offsetLabel}`;
 
   return (
     <>
@@ -133,9 +118,8 @@ export const HourChart = ({ points, day, tzOffsetMinutes = 0 }) => {
       <p className="chart-note">
         <span className="numeral">{activeHours}</span> of 24 hours used the agent,{" "}
         <span className="numeral">{billedHours}</span> of them billed something. Hours are clock
-        hours in <span className="numeral">{zone}</span>
-        {zone === "UTC" ? " (turn on Local days to bucket them by your clock)." : "."} Token counts
-        are cumulative across model calls, not the size of the context.
+        hours in <span className="numeral">{zone}</span>. Token counts are cumulative across
+        model calls, not the size of the context.
       </p>
     </>
   );

@@ -351,6 +351,31 @@ buckets are UTC days. `/api/daily` accepts a `tzOffset` query param and shifts
 in SQL for a local-day chart; the default is UTC so stored data stays
 unambiguous.
 
+### Timezone bucketing
+
+Stored timestamps are UTC and stay UTC. Day and hour buckets are a display decision, made
+in JavaScript through `Intl` (`server/timezone.js`) rather than in SQL: SQLite has no
+timezone database, and the previous approach - a fixed `tzOffsetMinutes` applied to every
+row in the range - is wrong on either side of a daylight-time transition. Measured: the
+2026 US transitions are March 8 and November 1, and a fixed -420 offset applied for a whole
+year would put Denver's summer days an hour late.
+
+`PI_COST_TZ` sets the zone (an IANA name; `America/Denver`, `Europe/Berlin`, `Asia/Kolkata`,
+`Australia/Eucla` all resolve, including half-hour and 45-minute offsets). Unset means UTC.
+An unresolvable name falls back to UTC and prints a warning at startup rather than charting
+in a zone the operator did not ask for. The zone drives:
+
+- day buckets on the daily chart,
+- the 24 hour labels in the drill-down,
+- the Today / 7-day / 30-day summary windows, where "today" starts at local midnight,
+- and the labels the page shows: the masthead, the chart legends, and the chart notes all
+  name the zone and its offset for the window in view (`UTC-6` for an October range in
+  Denver, `UTC-7` for a January one).
+
+There is deliberately no per-viewer control. The numbers on screen are computed server-side
+in one zone, so the page reports which zone that is instead of letting each browser redraw
+the same database differently.
+
 ### Model attribution
 
 Assistant messages and `usage` entries name the model they were billed against.
@@ -479,8 +504,9 @@ Server-side, in this order:
 | `POST` | `/api/ingest` | Upsert a session snapshot |
 | `GET` | `/api/summary?days=7` | Totals for window: cost, tokens, sessions |
 | `GET` | `/api/summary` | All-time totals plus today, 7d, 30d |
-| `GET` | `/api/daily?from&to&cwd&provider&tzOffset` | Points for the chart |
-| `GET` | `/api/hourly?day&cwd&provider&tzOffset` | One day's 24 hours, zero-filled |
+| `GET` | `/api/daily?from&to&cwd&provider` | Points for the chart, in `PI_COST_TZ` |
+| `GET` | `/api/hourly?day&cwd&provider` | One day's 24 hours, zero-filled, in `PI_COST_TZ` |
+| `GET` | `/api/config` | Zone the server buckets in, its offset label, and where the setting came from |
 | `GET` | `/api/sessions?limit&offset&cwd&sort` | Session table, newest first |
 | `GET` | `/api/sessions/:id` | One session, full totals and events |
 | `GET` | `/api/models` | Per-model spend, from `model_cost` |
@@ -976,6 +1002,7 @@ pair for a synchronous, single-file DB.
 | Host-side port mapping | `PI_COST_BIND` | `127.0.0.1:4870:4870`; compose variable, `0.0.0.0:4870:4870` for LAN |
 | Sessions directory | `PI_COST_SESSIONS_DIR` | falls back to Pi's `PI_CODING_AGENT_SESSION_DIR`, then `~/.pi/agent/sessions`; the container points it at an empty directory |
 | Database path | `PI_COST_DB` | `dashboard/data/cost.db`; `/app/data/cost.db` in the container |
+| Chart timezone | `PI_COST_TZ` | empty means UTC; an IANA name (`America/Denver`, `Asia/Kolkata`) buckets days, hours, and the Today window in that zone |
 
 The extension reads `process.env` directly. A future config file
 (`~/.pi/agent/extensions/pi-cost.json`) is listed as a follow-up so settings

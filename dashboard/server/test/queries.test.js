@@ -127,30 +127,31 @@ test("getDailyCost filters by project and by provider", () => {
   db.close();
 });
 
-test("getDailyCost shifts day buckets with a timezone offset", () => {
+test("getDailyCost buckets days by the zone it is given", () => {
   const db = seededDb();
 
   const utc = getDailyCost(db, { from: "2026-01-01", to: "2026-01-05" });
-  const west = getDailyCost(db, {
-    from: "2026-01-01",
-    to: "2026-01-05",
-    tzOffsetMinutes: -12 * 60,
-  });
-
-  // 10:00 UTC on 2026-01-01 is 2026-01-02 when shifted 12 hours east.
-  const east = getDailyCost(db, {
-    from: "2026-01-01",
-    to: "2026-01-05",
-    tzOffsetMinutes: 12 * 60,
-  });
+  // full-usage bills at 2026-01-01T10:00:05Z. UTC+14 (Kiritimati) reads that as Jan 2.
+  const east = getDailyCost(db, { from: "2026-01-01", to: "2026-01-05", timeZone: "Pacific/Kiritimati" });
+  const denver = getDailyCost(db, { from: "2026-01-01", to: "2026-01-05", timeZone: "America/Denver" });
 
   assert.equal(utc.points[0].day, "2026-01-01");
-  assert.equal(west.range.tzOffsetMinutes, -720);
-  assert.equal(east.range.tzOffsetMinutes, 720);
+  assert.equal(utc.range.timeZone, "UTC");
+  assert.equal(utc.range.offsetLabel, "UTC");
+
+  const eastBilled = east.points.find((point) => point.costMicros > 0);
+  assert.equal(eastBilled.day, "2026-01-02");
+  assert.equal(east.range.timeZone, "Pacific/Kiritimati");
+  assert.equal(east.range.offsetLabel, "UTC+14");
+
+  // UTC-7 keeps it on the same day, at 03:00 local.
+  assert.equal(denver.points.find((point) => point.costMicros > 0).day, "2026-01-01");
+  assert.equal(denver.range.offsetLabel, "UTC-7");
+
   assert.equal(
     east.points.reduce((sum, point) => sum + point.costMicros, 0),
     utc.points.reduce((sum, point) => sum + point.costMicros, 0),
-    "shifting moves cost between days, it never changes the total",
+    "a zone moves cost between days, it never changes the total",
   );
   db.close();
 });
@@ -238,8 +239,8 @@ test("getHealth reports counts, schema version, and last scan", () => {
  * @param {(baseUrl: string) => Promise<void>} block
  * @returns {Promise<void>}
  */
-const withServer = async (db, block) => {
-  const app = createApp(db, { sessionsDir: "/tmp/sessions", rescan: () => ({ scanned: 0 }) });
+const withServer = async (db, block, timeZone = null) => {
+  const app = createApp(db, { sessionsDir: "/tmp/sessions", rescan: () => ({ scanned: 0 }), timeZone });
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   const { port } = server.address();
@@ -287,16 +288,25 @@ test("getHourlyCost bills a day's spend to the hour it happened in", () => {
   db.close();
 });
 
-test("getHourlyCost moves buckets with the timezone offset, matching the day labels", () => {
+test("getHourlyCost labels hours on the zone's wall clock", () => {
   const db = seededDb();
   const utc = getHourlyCost(db, { day: "2026-01-01" }).points.find((p) => p.costMicros > 0);
-  const shifted = getHourlyCost(db, { day: "2026-01-01", tzOffsetMinutes: 120 }).points.find(
+  const istResult = getHourlyCost(db, { day: "2026-01-01", timeZone: "Asia/Kolkata" });
+  const ist = istResult.points.find((p) => p.costMicros > 0);
+  const denver = getHourlyCost(db, { day: "2026-01-01", timeZone: "America/Denver" }).points.find(
     (p) => p.costMicros > 0,
   );
 
+  // The same fact, 2026-01-01T10:00:05Z: 10:00 UTC, 15:30 in Kolkata, 03:00 in Denver.
   assert.equal(utc.label, "10:00");
-  assert.equal(shifted.label, "12:00");
-  assert.equal(shifted.costMicros, utc.costMicros);
+  assert.equal(ist.label, "15:00");
+  assert.equal(denver.label, "03:00");
+  assert.equal(ist.hour, "2026-01-01 15:00");
+  assert.equal(ist.costMicros, utc.costMicros);
+  assert.equal(istResult.range.offsetLabel, "UTC+5:30");
+  assert.equal(istResult.range.from, "2026-01-01 00:00");
+  assert.equal(istResult.range.to, "2026-01-01 23:00");
+  assert.equal(istResult.points.length, 24);
   db.close();
 });
 
@@ -417,6 +427,35 @@ test("the subagents flag filters every aggregate and rejects a non-flag", async 
   db.close();
 });
 
+test("the server's configured zone drives the charts and is reported by /api/config", async () => {
+  const db = seededDb();
+  await withServer(db, async (base) => {
+    const config = await (await fetch(`${base}/api/config`)).json();
+    assert.equal(config.timezone, "America/Denver");
+    assert.equal(config.timezoneSource, "env");
+    // October in Denver is daylight time, UTC-6.
+    assert.equal(config.offsetLabel, "UTC-6");
+    assert.equal(config.utcOffsetMinutes, -360);
+  }, "America/Denver");
+
+  await withServer(db, async (base) => {
+    // 2026-01-01T10:00:05Z is 03:00 on the same day in Denver (UTC-7), so the Jan 1 spend
+    // stays on Jan 1, and the labels say which zone the reader is looking at.
+    const daily = await (await fetch(`${base}/api/daily?from=2026-01-01&to=2026-01-02`)).json();
+    assert.equal(daily.range.timeZone, "America/Denver");
+    assert.equal(daily.range.offsetLabel, "UTC-7");
+
+    const hourly = await (await fetch(`${base}/api/hourly?day=2026-01-01`)).json();
+    assert.equal(hourly.range.offsetLabel, "UTC-7");
+    assert.equal(hourly.points.find((point) => point.costMicros > 0).label, "03:00");
+
+    // A zone moves money between buckets; it never changes the all-time total.
+    const summary = await (await fetch(`${base}/api/summary`)).json();
+    assert.equal(summary.allTime.costMicros, 19250 + 100000);
+  }, "America/Denver");
+  db.close();
+});
+
 test("GET /api/hourly returns a full day of hours and rejects a bad day", async () => {
   const db = seededDb();
   await withServer(db, async (base) => {
@@ -434,26 +473,28 @@ test("GET /api/hourly returns a full day of hours and rejects a bad day", async 
     assert.equal(badDay.status, 400);
     assert.equal((await badDay.json()).parameter, "day");
 
-    const badOffset = await fetch(`${base}/api/hourly?day=2026-01-01&tzOffsetMinutes=x`);
-    assert.equal(badOffset.status, 400);
-    assert.equal((await badOffset.json()).parameter, "tzOffsetMinutes");
+    const config = await fetch(`${base}/api/config`);
+    assert.equal(config.status, 200);
+    const configured = await config.json();
+    assert.equal(configured.timezone, "UTC", "no zone configured in the test server");
+    assert.equal(configured.timezoneSource, "default");
+    assert.equal(configured.offsetLabel, "UTC");
   });
   db.close();
 });
 
-test("GET /api/daily rejects a malformed date and offset", async () => {
+test("GET /api/daily rejects a malformed date", async () => {
   const db = seededDb();
   await withServer(db, async (base) => {
     const badDate = await fetch(`${base}/api/daily?from=not-a-date`);
     assert.equal(badDate.status, 400);
     assert.equal((await badDate.json()).parameter, "from");
 
-    const badOffset = await fetch(`${base}/api/daily?tzOffsetMinutes=abc`);
-    assert.equal(badOffset.status, 400);
-    assert.equal((await badOffset.json()).parameter, "tzOffsetMinutes");
-
     const ok = await fetch(`${base}/api/daily?from=2026-01-01&to=2026-01-03`);
     assert.equal(ok.status, 200);
+    const body = await ok.json();
+    assert.equal(body.range.timeZone, "UTC");
+    assert.equal(body.range.offsetLabel, "UTC");
   });
   db.close();
 });

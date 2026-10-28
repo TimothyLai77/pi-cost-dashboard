@@ -4,12 +4,15 @@
  * Every money value leaves this layer as `costMicros` (integer micro-US dollars) plus a
  * formatted `costUsd` string, so the UI never sums raw floats.
  *
- * Day bucketing is UTC by default because stored timestamps are UTC. Pass
- * `tzOffsetMinutes` to bucket by local day instead: the offset is applied in SQL with
- * `datetime(occurred_at, offset)`, so stored data stays unambiguous.
+ * Stored timestamps are UTC. Day and hour bucketing is a display decision, so it happens
+ * here in JavaScript through `Intl` (see timezone.js) rather than in SQL with a fixed
+ * minute offset: a fixed offset is only correct while daylight time does not change inside
+ * the requested range. Pass `timeZone` (an IANA name, or null for UTC) and every bucket is
+ * resolved at its own instant.
  */
 
 import { formatUsd } from "./scanner/aggregate.js";
+import { localDay, localDayStart, localHour, nextDayString, offsetLabel, windowStartDay } from "./timezone.js";
 
 /** Default page size for the session list. @type {number} */
 export const DEFAULT_PAGE_SIZE = 25;
@@ -34,17 +37,6 @@ const clampLimit = (rawValue, fallback = DEFAULT_PAGE_SIZE) => {
   const parsed = Number(rawValue);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.min(Math.trunc(parsed), MAX_PAGE_SIZE);
-};
-
-/**
- * Build the SQL fragment that shifts a UTC timestamp into the requested day.
- * @param {number} [tzOffsetMinutes] Minutes east of UTC; omitted means UTC
- * @returns {string} SQL expression producing a YYYY-MM-DD string
- */
-const dayExpression = (tzOffsetMinutes) => {
-  const offset = Number(tzOffsetMinutes);
-  if (!Number.isFinite(offset) || offset === 0) return "date(u.occurred_at)";
-  return `date(datetime(u.occurred_at, '${Math.trunc(offset)} minutes'))`;
 };
 
 /**
@@ -85,24 +77,30 @@ const subagentCondition = (includeSubagents = true) =>
  * of a conversation.
  *
  * @param {import("better-sqlite3").Database} db
- * @param {number | null} [days] Window length in days, counted backwards from today (UTC); null means all time
- * @param {{ includeSubagents?: boolean }} [options]
+ * @param {number | null} [days] Window length in days, counted backwards from today; null means all time
+ * @param {{ includeSubagents?: boolean, timeZone?: string | null }} [options]
  * @returns {{ window: object, allTime: object, today: object, last7Days: object, last30Days: object }}
  */
 export const getSummary = (db, days = 7, options = {}) => {
   const includeSubagents = options.includeSubagents !== false;
+  const timeZone = options.timeZone ?? null;
   // Excluding subagents needs the sessions table, so the join is only paid for when used.
   const sessionsJoin = includeSubagents ? "" : "JOIN sessions s ON s.session_id = u.session_id";
   const subagents = subagentCondition(includeSubagents);
 
   const totalsFor = (dayCount) => {
     // Cost is bucketed by when the usage happened, the same basis the chart uses, so a
-    // session resumed days later bills its new usage to the later day.
+    // session resumed days later bills its new usage to the later day. "Today" is today in
+    // the configured zone, so the floor is the instant that local day began.
     const where = dayCount === null
       ? subagents.trim().length > 0
         ? `WHERE TRUE ${subagents}`
         : ""
-      : `WHERE date(u.occurred_at) >= date('now', '-${Math.trunc(dayCount) - 1} days')${subagents}`;
+      : `WHERE u.occurred_at >= @start${subagents}`;
+    const params =
+      dayCount === null
+        ? {}
+        : { start: localDayStart(windowStartDay(dayCount, timeZone), timeZone) };
     const row = db
       .prepare(
         `SELECT COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
@@ -117,7 +115,7 @@ export const getSummary = (db, days = 7, options = {}) => {
          ${sessionsJoin}
          ${where}`,
       )
-      .get();
+      .get(params);
     return {
       ...money(row.cost_micros),
       totalTokens: row.total_tokens,
@@ -147,22 +145,24 @@ export const getSummary = (db, days = 7, options = {}) => {
  * produce genuine $0 days, and a chart that hides them reads as an outage.
  *
  * @param {import("better-sqlite3").Database} db
- * @param {{ from?: string, to?: string, cwd?: string, provider?: string, tzOffsetMinutes?: number }} [options]
+ * @param {{ from?: string, to?: string, cwd?: string, provider?: string, includeSubagents?: boolean, timeZone?: string | null }} [options]
  * @returns {{ range: object, points: { day: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[] }}
  */
 export const getDailyCost = (db, options = {}) => {
-  const tzOffset = Number(options.tzOffsetMinutes ?? 0);
-  const day = dayExpression(options.tzOffsetMinutes);
+  const timeZone = options.timeZone ?? null;
 
+  // Bounds are local days, so they are converted to UTC instants: from-day start
+  // (inclusive) to the instant the day after `to` begins (exclusive). Timestamps are
+  // fixed-width ISO strings, so string comparison is chronological.
   const filters = [];
   const params = {};
   if (options.from) {
-    filters.push(`${day} >= date(@from)`);
-    params.from = options.from;
+    filters.push("u.occurred_at >= @start");
+    params.start = localDayStart(options.from, timeZone);
   }
   if (options.to) {
-    filters.push(`${day} <= date(@to)`);
-    params.to = options.to;
+    filters.push("u.occurred_at < @end");
+    params.end = localDayStart(nextDayString(options.to), timeZone);
   }
   if (options.cwd) {
     filters.push("s.cwd = @cwd");
@@ -177,82 +177,76 @@ export const getDailyCost = (db, options = {}) => {
   }
   const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
+  // Facts, not SQL aggregates: the day a fact belongs to is a wall-clock question, and
+  // SQLite has no timezone database. This is a few thousand rows on a large install.
   const rows = db
     .prepare(
-      `SELECT ${day} AS day,
-              COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
-              COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
-              COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
-              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
-              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
-              COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
-              COUNT(*)                         AS events,
-              COUNT(DISTINCT u.session_id)     AS sessions
+      `SELECT u.occurred_at, u.session_id, u.cost_micros, u.total_tokens,
+              u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
        ${whereClause}
-       GROUP BY day
-       ORDER BY day`,
+       ORDER BY u.occurred_at`,
     )
     .all(params);
 
-  const pointsByDay = new Map(rows.map((row) => [row.day, row]));
+  const byDay = new Map();
+  for (const row of rows) {
+    const day = localDay(row.occurred_at, timeZone);
+    const bucket = byDay.get(day) ?? {
+      cost_micros: 0,
+      total_tokens: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      events: 0,
+      sessions: new Set(),
+    };
+    bucket.cost_micros += row.cost_micros;
+    bucket.total_tokens += row.total_tokens;
+    bucket.input_tokens += row.input_tokens;
+    bucket.output_tokens += row.output_tokens;
+    bucket.cache_read_tokens += row.cache_read_tokens;
+    bucket.cache_write_tokens += row.cache_write_tokens;
+    bucket.events += 1;
+    bucket.sessions.add(row.session_id);
+    byDay.set(day, bucket);
+  }
 
-  // Fill gaps between the first and last day in range.
-  const boundaries = db
-    .prepare(
-      `SELECT MIN(${day}) AS first_day, MAX(${day}) AS last_day
-       FROM usage_events u JOIN sessions s ON s.session_id = u.session_id
-       ${whereClause}`,
-    )
-    .get(params);
-
-  const startDay = options.from ?? boundaries.first_day;
-  const endDay = options.to ?? boundaries.last_day;
+  const days = [...byDay.keys()].sort();
+  const startDay = options.from ?? days[0] ?? null;
+  const endDay = options.to ?? days[days.length - 1] ?? null;
   const points = [];
 
   if (startDay && endDay) {
-    const fill = db
-      .prepare(
-        `WITH days AS (
-           SELECT date(@start) AS day
-           UNION ALL
-           SELECT date(day, '+1 day') FROM days WHERE day < date(@end)
-         )
-         SELECT day FROM days ORDER BY day`,
-      )
-      .all({ start: startDay, end: endDay });
-
-    for (const { day: dayValue } of fill) {
-      const row = pointsByDay.get(dayValue) ?? {
-        cost_micros: 0,
-        total_tokens: 0,
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_read_tokens: 0,
-        cache_write_tokens: 0,
-        events: 0,
-        sessions: 0,
-      };
+    for (const day of dayRange(startDay, endDay)) {
+      const bucket = byDay.get(day);
       points.push({
-        day: dayValue,
-        ...money(row.cost_micros),
-        totalTokens: row.total_tokens,
-        inputTokens: row.input_tokens,
-        outputTokens: row.output_tokens,
-        cacheReadTokens: row.cache_read_tokens,
-        cacheWriteTokens: row.cache_write_tokens,
-        events: row.events,
-        sessions: row.sessions,
+        day,
+        ...money(bucket?.cost_micros ?? 0),
+        totalTokens: bucket?.total_tokens ?? 0,
+        inputTokens: bucket?.input_tokens ?? 0,
+        outputTokens: bucket?.output_tokens ?? 0,
+        cacheReadTokens: bucket?.cache_read_tokens ?? 0,
+        cacheWriteTokens: bucket?.cache_write_tokens ?? 0,
+        events: bucket?.events ?? 0,
+        sessions: bucket ? bucket.sessions.size : 0,
       });
     }
   }
 
   return {
     range: {
-      from: startDay ?? null,
-      to: endDay ?? null,
-      tzOffsetMinutes: Number.isFinite(tzOffset) ? Math.trunc(tzOffset) : 0,
+      from: startDay,
+      to: endDay,
+      timeZone: timeZone ?? "UTC",
+      // The offset a reader wants is the one in effect for the window they are looking at,
+      // not today's: a January range in Denver is UTC-7 even when it is July right now.
+      offsetLabel: offsetLabel(
+        timeZone,
+        endDay ? new Date(localDayStart(endDay, timeZone)) : new Date(),
+      ),
     },
     totalCostMicros: points.reduce((sum, point) => sum + point.costMicros, 0),
     totalCostUsd: formatUsd(points.reduce((sum, point) => sum + point.costMicros, 0)),
@@ -261,18 +255,20 @@ export const getDailyCost = (db, options = {}) => {
 };
 
 /**
- * Build the SQL fragment that shifts a UTC timestamp into the requested hour.
- *
- * Mirrors dayExpression: the shift is applied to the timestamp before formatting, so the
- * hour labels are in the same frame as the day labels the daily chart shows.
- *
- * @param {number} [tzOffsetMinutes] Minutes east of UTC; omitted means UTC
- * @returns {string} SQL expression producing a 'YYYY-MM-DD HH:00' string
+ * Every `YYYY-MM-DD` calendar string from one day to another, inclusive.
+ * @param {string} fromDay `YYYY-MM-DD`
+ * @param {string} toDay `YYYY-MM-DD`
+ * @returns {string[]} Ascending day strings, empty when the range is inverted
  */
-const hourExpression = (tzOffsetMinutes) => {
-  const offset = Number(tzOffsetMinutes);
-  const shift = Number.isFinite(offset) && offset !== 0 ? `, '${Math.trunc(offset)} minutes'` : "";
-  return `strftime('%Y-%m-%d %H:00', datetime(u.occurred_at${shift}))`;
+const dayRange = (fromDay, toDay) => {
+  const days = [];
+  let current = fromDay;
+  // A hard ceiling keeps a bad range from looping; 3660 days is a decade of chart.
+  while (current <= toDay && days.length < 3660) {
+    days.push(current);
+    current = nextDayString(current);
+  }
+  return days;
 };
 
 /**
@@ -283,16 +279,21 @@ const hourExpression = (tzOffsetMinutes) => {
  * point of the hourly view is to say which hours were idle.
  *
  * @param {import("better-sqlite3").Database} db
- * @param {{ day: string, cwd?: string, provider?: string, tzOffsetMinutes?: number }} options
- *   `day` is the YYYY-MM-DD value the daily chart showed, in the same timezone frame
+ * @param {{ day: string, cwd?: string, provider?: string, includeSubagents?: boolean, timeZone?: string | null }} options
+ *   `day` is the YYYY-MM-DD value the daily chart showed, in the same zone frame
  * @returns {{ day: string, range: object, points: { hour: string, label: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[] }}
  */
 export const getHourlyCost = (db, options = {}) => {
-  const tzOffset = Number(options.tzOffsetMinutes ?? 0);
-  const hour = hourExpression(options.tzOffsetMinutes);
+  const timeZone = options.timeZone ?? null;
 
-  const filters = [`CAST(${hour} AS TEXT) >= datetime(@day)`, `CAST(${hour} AS TEXT) < datetime(@day, '+1 day')`];
-  const params = { day: options.day };
+  const filters = [
+    "u.occurred_at >= @start",
+    "u.occurred_at < @end",
+  ];
+  const params = {
+    start: localDayStart(options.day, timeZone),
+    end: localDayStart(nextDayString(options.day), timeZone),
+  };
 
   if (options.cwd) {
     filters.push("s.cwd = @cwd");
@@ -309,41 +310,19 @@ export const getHourlyCost = (db, options = {}) => {
 
   const rows = db
     .prepare(
-      `SELECT ${hour} AS hour,
-              COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
-              COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
-              COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
-              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
-              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
-              COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
-              COUNT(*)                         AS events,
-              COUNT(DISTINCT u.session_id)     AS sessions
+      `SELECT u.occurred_at, u.session_id, u.cost_micros, u.total_tokens,
+              u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
        ${whereClause}
-       GROUP BY hour
-       ORDER BY hour`,
+       ORDER BY u.occurred_at`,
     )
     .all(params);
 
-  const pointsByHour = new Map(rows.map((row) => [row.hour, row]));
-
-  // 24 fixed labels for the day, in the requested timezone frame.
-  const hours = db
-    .prepare(
-      `WITH hours AS (
-         SELECT strftime('%Y-%m-%d %H:00', datetime(date(@day))) AS hour
-         UNION ALL
-         SELECT strftime('%Y-%m-%d %H:00', datetime(hour, '+1 hour'))
-         FROM hours
-         WHERE datetime(hour, '+1 hour') < datetime(date(@day), '+1 day')
-       )
-       SELECT hour FROM hours ORDER BY hour`,
-    )
-    .all({ day: options.day });
-
-  const points = hours.map(({ hour: hourValue }) => {
-    const row = pointsByHour.get(hourValue) ?? {
+  const byHour = new Map();
+  for (const row of rows) {
+    const hour = localHour(row.occurred_at, timeZone);
+    const bucket = byHour.get(hour) ?? {
       cost_micros: 0,
       total_tokens: 0,
       input_tokens: 0,
@@ -351,28 +330,44 @@ export const getHourlyCost = (db, options = {}) => {
       cache_read_tokens: 0,
       cache_write_tokens: 0,
       events: 0,
-      sessions: 0,
+      sessions: new Set(),
     };
+    bucket.cost_micros += row.cost_micros;
+    bucket.total_tokens += row.total_tokens;
+    bucket.input_tokens += row.input_tokens;
+    bucket.output_tokens += row.output_tokens;
+    bucket.cache_read_tokens += row.cache_read_tokens;
+    bucket.cache_write_tokens += row.cache_write_tokens;
+    bucket.events += 1;
+    bucket.sessions.add(row.session_id);
+    byHour.set(hour, bucket);
+  }
+
+  // 24 fixed labels for the local day, so idle hours are visible.
+  const points = Array.from({ length: 24 }, (_, index) => {
+    const hour = `${options.day} ${String(index).padStart(2, "0")}:00`;
+    const bucket = byHour.get(hour);
     return {
-      hour: hourValue,
-      label: hourValue.slice(11, 16),
-      ...money(row.cost_micros),
-      totalTokens: row.total_tokens,
-      inputTokens: row.input_tokens,
-      outputTokens: row.output_tokens,
-      cacheReadTokens: row.cache_read_tokens,
-      cacheWriteTokens: row.cache_write_tokens,
-      events: row.events,
-      sessions: row.sessions,
+      hour,
+      label: hour.slice(11, 16),
+      ...money(bucket?.cost_micros ?? 0),
+      totalTokens: bucket?.total_tokens ?? 0,
+      inputTokens: bucket?.input_tokens ?? 0,
+      outputTokens: bucket?.output_tokens ?? 0,
+      cacheReadTokens: bucket?.cache_read_tokens ?? 0,
+      cacheWriteTokens: bucket?.cache_write_tokens ?? 0,
+      events: bucket?.events ?? 0,
+      sessions: bucket ? bucket.sessions.size : 0,
     };
   });
 
   return {
     day: options.day,
     range: {
-      from: hours[0]?.hour ?? null,
-      to: hours[hours.length - 1]?.hour ?? null,
-      tzOffsetMinutes: Number.isFinite(tzOffset) ? Math.trunc(tzOffset) : 0,
+      from: points[0]?.hour ?? null,
+      to: points[points.length - 1]?.hour ?? null,
+      timeZone: timeZone ?? "UTC",
+      offsetLabel: offsetLabel(timeZone, new Date(localDayStart(options.day, timeZone))),
     },
     totalCostMicros: points.reduce((sum, point) => sum + point.costMicros, 0),
     totalCostUsd: formatUsd(points.reduce((sum, point) => sum + point.costMicros, 0)),

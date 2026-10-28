@@ -40,6 +40,9 @@ services:
       # database is built entirely from extension reports. Point this at a mounted Pi
       # sessions directory (read-only) to scan local history as well.
       PI_COST_SESSIONS_DIR: /app/no-sessions
+      # IANA zone name used for day and hour bucketing, e.g. America/Denver or Europe/Berlin.
+      # Empty means UTC. Set it in dashboard/.env; the dashboard labels its charts with it.
+      PI_COST_TZ: ${PI_COST_TZ:-}
     volumes:
       # The SQLite file. A named volume avoids host filesystem ownership problems;
       # `docker compose down -v` deletes it, plain `down` keeps it.

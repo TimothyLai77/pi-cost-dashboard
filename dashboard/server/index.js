@@ -33,6 +33,7 @@ import {
   getSessions,
   getSummary,
 } from "./queries.js";
+import { isSupportedTimeZone, offsetLabel, utcOffsetMinutes } from "./timezone.js";
 import { resolveSessionsDir, scanSessions } from "./scanner/scan.js";
 
 /** Seconds between background rescans of the sessions directory. @type {number} */
@@ -139,6 +140,18 @@ export const createApp = (db, dependencies) => {
     res.json(getHealth(db, dependencies.sessionsDir, dependencies.fileCount?.()));
   });
 
+  // What the server buckets by, so the page can label its own numbers. There is no
+  // per-viewer control: the whole page is drawn in this zone, and it says so.
+  app.get("/api/config", (_req, res) => {
+    const timeZone = dependencies.timeZone ?? null;
+    res.json({
+      timezone: timeZone ?? "UTC",
+      timezoneSource: timeZone ? "env" : "default",
+      offsetLabel: offsetLabel(timeZone),
+      utcOffsetMinutes: timeZone ? utcOffsetMinutes(timeZone) : 0,
+    });
+  });
+
   app.get(
     "/api/summary",
     requireIntegers((req, res) => {
@@ -146,6 +159,7 @@ export const createApp = (db, dependencies) => {
       res.json(
         getSummary(db, req.parsedParams.days ?? 7, {
           includeSubagents: parseFlag(req.query.subagents, true).value,
+          timeZone: dependencies.timeZone ?? null,
         }),
       );
     }, ["days"]),
@@ -160,22 +174,13 @@ export const createApp = (db, dependencies) => {
       res.status(400).json({ error: "invalid_parameter", parameter: "day", received: day });
       return;
     }
-    const offset = parseInteger(req.query.tzOffsetMinutes);
-    if (offset === undefined) {
-      res.status(400).json({
-        error: "invalid_parameter",
-        parameter: "tzOffsetMinutes",
-        received: req.query.tzOffsetMinutes,
-      });
-      return;
-    }
     res.json(
       getHourlyCost(db, {
         day,
         cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
         provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
-        tzOffsetMinutes: offset ?? 0,
         includeSubagents: parseFlag(req.query.subagents, true).value,
+        timeZone: dependencies.timeZone ?? null,
       }),
     );
   });
@@ -191,23 +196,14 @@ export const createApp = (db, dependencies) => {
       res.status(400).json({ error: "invalid_parameter", parameter: "to", received: to });
       return;
     }
-    const offset = parseInteger(req.query.tzOffsetMinutes);
-    if (offset === undefined) {
-      res.status(400).json({
-        error: "invalid_parameter",
-        parameter: "tzOffsetMinutes",
-        received: req.query.tzOffsetMinutes,
-      });
-      return;
-    }
     res.json(
       getDailyCost(db, {
         from: isIsoDate(from) ? from : undefined,
         to: isIsoDate(to) ? to : undefined,
         cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
         provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
-        tzOffsetMinutes: offset ?? 0,
         includeSubagents: parseFlag(req.query.subagents, true).value,
+        timeZone: dependencies.timeZone ?? null,
       }),
     );
   });
@@ -286,7 +282,16 @@ export const listen = (options = {}) => {
   const sessionsDir = resolveSessionsDir(process.env.PI_COST_SESSIONS_DIR);
   const runScan = (force = false) => scanSessions(sessionsDir, db, { force });
 
-  const app = createApp(db, { sessionsDir, rescan: () => runScan(true) });
+  // PI_COST_TZ is an IANA zone name (America/Denver, Europe/Berlin, Asia/Kolkata).
+  // An unrecognizable name falls back to UTC and says so, because silently charting in the
+  // wrong zone is worse than a startup line telling you the name was bad.
+  const requestedZone = process.env.PI_COST_TZ;
+  const timeZone = isSupportedTimeZone(requestedZone) ? requestedZone : null;
+  if (requestedZone && requestedZone !== "" && !timeZone) {
+    console.warn(`PI_COST_TZ "${requestedZone}" is not a timezone this Node can resolve; charting in UTC`);
+  }
+
+  const app = createApp(db, { sessionsDir, rescan: () => runScan(true), timeZone });
 
   const port = options.port ?? Number(process.env.PI_COST_PORT ?? DEFAULT_PORT);
   const host = options.host ?? process.env.PI_COST_HOST ?? DEFAULT_HOST;

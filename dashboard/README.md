@@ -138,12 +138,13 @@ dashboard/
 | Method | Path | Status |
 |---|---|---|
 | `GET` | `/api/summary?days=7` | today / 7d / 30d / all-time totals |
-| `GET` | `/api/daily?from&to&cwd&provider&tzOffsetMinutes` | chart points, gap-filled |
-| `GET` | `/api/hourly?day&cwd&provider&tzOffsetMinutes` | one day's 24 hours, zero-filled |
+| `GET` | `/api/daily?from&to&cwd&provider&subagents` | chart points, gap-filled |
+| `GET` | `/api/hourly?day&cwd&provider&subagents` | one day's 24 hours, zero-filled |
 | `GET` | `/api/sessions/:id` | one session with its usage facts |
 | `GET` | `/api/models` | spend by provider and model |
 | `GET` | `/api/filters` | project and provider values for the controls |
 | `GET` | `/api/health` | counts, schema version, last scan |
+| `GET` | `/api/config` | zone the server buckets in, its offset label, and where the setting came from |
 | `POST` | `/api/rescan` | force a full rescan |
 | `POST` | `/api/ingest` | extension report: validated, provisional, idempotent |
 
@@ -161,6 +162,23 @@ Token figures on the charts are cumulative across model calls, not context size:
 long session re-reads its cached context on every call, so cache reads dominate the
 total. Chart tooltips break the number out into cache read, output, input, and
 cache write.
+
+## Timezone
+
+`PI_COST_TZ` sets the zone the dashboard buckets in: the day bars, the 24 hour labels in
+the drill-down, and the Today / 7-day / 30-day windows. Use an IANA name:
+
+```bash
+PI_COST_TZ=America/Denver   # daylight time is handled across the whole chart range
+PI_COST_TZ=Europe/Berlin
+PI_COST_TZ=Asia/Kolkata     # half-hour and 45-minute offsets work too
+# unset, or empty, means UTC
+```
+
+Stored timestamps stay UTC; only the buckets change. The page names the zone it used in the
+masthead, the chart legend, and the hourly note, so a screenshot says which clock its bars
+are on. There is no per-viewer picker: the server computes the buckets, so every screen
+shows the same answer.
 
 ## Data model
 

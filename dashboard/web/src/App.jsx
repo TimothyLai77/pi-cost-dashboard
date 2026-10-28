@@ -73,9 +73,6 @@ export const App = () => {
   const [provider, setProvider] = useState("");
   const [page, setPage] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
-  // UTC is how the data is stored. Bucketing by local day is a display choice, so it
-  // defaults off and is applied as an offset the server computes in SQL.
-  const [localDays, setLocalDays] = useState(false);
   // Pi bills a subagent as its own session and again inside its parent's toolResult usage.
   // Counting both is the honest total, so it is the default; you can drop the nested ones.
   const [includeSubagents, setIncludeSubagents] = useState(
@@ -94,9 +91,12 @@ export const App = () => {
   const theme = useTheme();
 
   const range = RANGES[rangeIndex];
-  const tzOffsetMinutes = localDays ? -new Date().getTimezoneOffset() : 0;
   // Sent as 1/0 on every aggregate so the whole page answers the same question.
   const subagents = includeSubagents ? 1 : 0;
+
+  // The zone the server buckets in comes from the server (PI_COST_TZ), so there is no
+  // per-viewer control: the page reads the zone off the API and labels itself with it.
+  const config = useApi("/api/config", { _k: refreshKey });
 
   const summary = useApi("/api/summary", { days: range.days ?? 7, subagents, _k: refreshKey });
   const filters = useApi("/api/filters", { _k: refreshKey });
@@ -114,7 +114,6 @@ export const App = () => {
     ...rangeParams,
     cwd: project,
     provider,
-    tzOffsetMinutes,
     subagents,
     _k: refreshKey,
   });
@@ -133,7 +132,6 @@ export const App = () => {
     day: drillDay ?? "",
     cwd: project,
     provider,
-    tzOffsetMinutes,
     subagents,
     _k: refreshKey,
   });
@@ -197,6 +195,9 @@ export const App = () => {
                 : " · fed by session reports, nothing scanned from disk"}
               {" · "}
               rows marked live are self-reported by a session active in the last 15 minutes
+              {config.data
+                ? ` · days and hours are ${config.data.timezone} (${config.data.offsetLabel})`
+                : ""}
             </p>
           )}
         </div>
@@ -227,10 +228,6 @@ export const App = () => {
               </button>
             ))}
           </span>
-          <label title="Bucket days by your browser's timezone instead of UTC">
-            <input type="checkbox" checked={localDays} onChange={(event) => setLocalDays(event.target.checked)} />
-            Local days
-          </label>
           <label
             title="A subagent is billed as its own session and again inside its parent's tool-result usage. Counting both is the full spend; turning this off shows only what each session paid directly."
           >
@@ -353,7 +350,8 @@ export const App = () => {
               <HourChart
                 points={hourly.data.points}
                 day={hourly.data.day}
-                tzOffsetMinutes={hourly.data.range?.tzOffsetMinutes ?? 0}
+                timeZone={hourly.data.range?.timeZone}
+                offsetLabel={hourly.data.range?.offsetLabel}
               />
             )}
           </Panel>
