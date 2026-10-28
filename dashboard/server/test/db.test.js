@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 import { currentVersion, listMigrations, migrateDown, migrateUp, openDatabase } from "../db.js";
 import { upsertSession } from "../upsert.js";
+import { ingestSession, SCHEMA_VERSION } from "../ingest.js";
 import { aggregateSession } from "../scanner/aggregate.js";
 import { listSessionFiles, resolveSessionsDir, scanSessions } from "../scanner/scan.js";
 
@@ -388,4 +389,98 @@ test("sessions directory resolution prefers explicit, then env, then default", (
     if (saved === undefined) delete process.env.PI_CODING_AGENT_SESSION_DIR;
     else process.env.PI_CODING_AGENT_SESSION_DIR = saved;
   }
+});
+
+/**
+ * A valid ingest payload built from a fixture, for the push-fed scan cases below.
+ * @param {string} [fixture]
+ * @returns {object}
+ */
+const pushPayload = (fixture = "full-usage.jsonl") => {
+  const { session, events } = loadFixture(fixture);
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    sessionId: session.sessionId,
+    sessionFile: session.sessionFile,
+    cwd: session.cwd,
+    name: session.name,
+    parentSessionId: session.parentSessionId,
+    startedAt: session.startedAt,
+    lastActivityAt: session.lastActivityAt,
+    entryCount: session.entryCount,
+    totals: {
+      costMicros: session.costMicros,
+      inputTokens: session.inputTokens,
+      outputTokens: session.outputTokens,
+      cacheReadTokens: session.cacheReadTokens,
+      cacheWriteTokens: session.cacheWriteTokens,
+      totalTokens: session.totalTokens,
+      userMessages: session.userMessages,
+      assistantMessages: session.assistantMessages,
+      toolCalls: session.toolCalls,
+      toolResults: session.toolResults,
+      totalMessages: session.totalMessages,
+    },
+    events,
+    reportedBy: "agent_settled",
+    reportedAt: session.lastActivityAt,
+  };
+};
+
+test("a missing sessions directory scans as nothing instead of throwing", () => {
+  const db = migratedDb();
+  const missing = join(mkdtempSync(join(tmpdir(), "pi-cost-nodir-")), "absent");
+
+  assert.deepEqual(listSessionFiles(missing), []);
+
+  const result = scanSessions(missing, db);
+  assert.equal(result.files, 0);
+  assert.equal(result.scanned, 0);
+  assert.equal(result.updated, 0);
+  assert.equal(result.deleted, 0);
+
+  db.close();
+});
+
+test("a scan with no directory leaves pushed sessions intact", () => {
+  const db = migratedDb();
+  const payload = pushPayload();
+  ingestSession(db, payload);
+
+  const missing = join(mkdtempSync(join(tmpdir(), "pi-cost-nodir-")), "absent");
+  const result = scanSessions(missing, db);
+
+  const row = db.prepare("SELECT last_source, cost_micros, entry_count FROM sessions").get();
+  assert.equal(result.deleted, 0, "a sweep over an empty directory deletes nothing");
+  assert.equal(row.last_source, "push");
+  assert.equal(row.cost_micros, 19250);
+
+  db.close();
+});
+
+test("repeated pushes update a session row, so a running session updates itself", () => {
+  const db = migratedDb();
+  const payload = pushPayload("full-usage.jsonl");
+  ingestSession(db, payload);
+
+  // The same session reporting again with one more entry: an equal-or-higher entry count
+  // is the push-over-push case, and it must be written.
+  const nextReport = { ...payload, entryCount: payload.entryCount + 1, reportedAt: payload.reportedAt };
+  const applied = ingestSession(db, nextReport);
+  assert.equal(applied.body.applied, true, "a push may replace a push");
+  assert.equal(
+    db.prepare("SELECT entry_count FROM sessions").get().entry_count,
+    payload.entryCount + 1,
+  );
+
+  // An older snapshot, reported later, must not roll the row back.
+  const stale = { ...payload, entryCount: payload.entryCount - 4 };
+  const response = ingestSession(db, stale);
+  assert.equal(response.body.applied, false, "an older snapshot is refused");
+  assert.equal(db.prepare("SELECT entry_count FROM sessions").get().entry_count, payload.entryCount + 1);
+
+  const facts = db.prepare("SELECT COUNT(*) AS n FROM usage_events").get().n;
+  assert.ok(facts > 0, "the pushed facts are stored");
+
+  db.close();
 });

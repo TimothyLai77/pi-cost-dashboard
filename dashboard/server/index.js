@@ -7,9 +7,14 @@
  *
  * The periodic rescan timer starts in `main()`, not at module load, so importing this
  * module for tests does not start background work.
+ *
+ * Configuration comes from the process environment. This module deliberately does not load
+ * a `.env` file: tests import `createApp`, and a file-based side effect would make the
+ * suite depend on whatever config the developer running it happens to have. `npm start`
+ * and `npm run dev:server` pass Node's `--env-file-if-exists=.env`, and containers get
+ * their configuration from the environment.
  */
 
-import "dotenv/config";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

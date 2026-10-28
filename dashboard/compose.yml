@@ -1,0 +1,50 @@
+# Pi cost dashboard as a container, hosted on a LAN machine.
+#
+#   cd dashboard
+#   docker compose up -d --build
+#
+# Bind and token come from dashboard/.env so the same compose file works for a loopback
+# test box and for a LAN host without editing YAML:
+#
+#   PI_COST_BIND=127.0.0.1:4870:4870   # loopback only, for testing on the host itself
+#   PI_COST_BIND=0.0.0.0:4870:4870     # reachable from the LAN
+#   PI_COST_TOKEN=<secret>
+#
+# Reads stay open: on a trusted LAN, the dashboard opens in a browser with no secret.
+# Writes (POST /api/ingest, /api/rescan) always require the x-pi-cost-token header when
+# PI_COST_TOKEN is set, which is what the Pi extension sends.
+#
+# This deployment is push-fed: Pi machines report their sessions to the API, and the
+# scanner is pointed at an empty directory inside the image, so nothing is read off the
+# host running the server. See PI_COST_SESSIONS_DIR below.
+
+name: pi-cost-dashboard
+
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pi-cost-dashboard:local
+    restart: unless-stopped
+    ports:
+      - ${PI_COST_BIND:-127.0.0.1:4870:4870}
+    environment:
+      # 0.0.0.0 inside the container is required for a published port to be reachable
+      # from another machine; the host-side binding is what decides who can connect.
+      PI_COST_HOST: 0.0.0.0
+      PI_COST_PORT: "4870"
+      PI_COST_DB: /app/data/cost.db
+      PI_COST_TOKEN: ${PI_COST_TOKEN:?PI_COST_TOKEN must be set in dashboard/.env}
+      # Pushes-only: an empty directory means the scanner finds nothing to read and the
+      # database is built entirely from extension reports. Point this at a mounted Pi
+      # sessions directory (read-only) to scan local history as well.
+      PI_COST_SESSIONS_DIR: /app/no-sessions
+    volumes:
+      # The SQLite file. A named volume avoids host filesystem ownership problems;
+      # `docker compose down -v` deletes it, plain `down` keeps it.
+      - pi-cost-data:/app/data
+    # The healthcheck lives in the Dockerfile, so plain `docker run` is covered too.
+
+volumes:
+  pi-cost-data:

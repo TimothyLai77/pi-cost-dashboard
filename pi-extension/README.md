@@ -7,13 +7,16 @@ measurements in [../DESIGN.md](../DESIGN.md) §9.
 
 ```bash
 ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
-export PI_COST_URL=http://127.0.0.1:4870/api/ingest
+export PI_COST_URL=http://your-dashboard-host:4870/api/ingest   # LAN host, name or IP
+export PI_COST_TOKEN=<the server's PI_COST_TOKEN>              # when the server sets one
 ```
 
 Develop against one session without installing: `pi --extension ./pi-cost.ts`
 
 Inert when `PI_COST_URL` is unset: an unconfigured Pi session does no network work, writes
-no files, and registers nothing.
+no files, and registers nothing. With `PI_COST_TOKEN` unset it reports to a server that has
+no token configured; against a token-protected server every report is refused with 401 and
+logged to `~/.pi/agent/extensions/pi-cost.log`.
 
 ## Commands
 
@@ -33,8 +36,10 @@ no files, and registers nothing.
 | `session_shutdown` | Yes, 2 s cap | Process exit kills in-flight requests; no prompts left to delay |
 
 Automatic reports run only in interactive sessions. A print-mode run has no prompts to
-protect, and the scanner reads its session file from disk seconds later, so skipping the
-report loses nothing.
+protect, and in a deployment that scans session files the scanner picks its session up
+seconds later. In a push-fed deployment — the container scans nothing — the report at
+session exit is what puts a print-mode session on the dashboard, so run it with
+`PI_COST_URL` set.
 
 ## The two constraints that shaped this
 

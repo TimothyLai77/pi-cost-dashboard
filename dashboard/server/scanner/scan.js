@@ -8,7 +8,7 @@
  * unchanged pair skips the parse entirely.
  */
 
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { aggregateSession } from "./aggregate.js";
@@ -37,6 +37,12 @@ export const NON_SESSION_DIRECTORIES = new Set(["subagent-artifacts"]);
  */
 export const listSessionFiles = (sessionsDir) => {
   const files = [];
+
+  // A deployment fed only by extension pushes has no scanned directory. Treating a
+  // missing one as "nothing to scan" keeps the periodic scan from throwing, and the
+  // sweep below leaves pushed rows alone because they are not tracked in scan_state.
+  if (!existsSync(sessionsDir)) return files;
+
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const fullPath = join(dir, entry.name);

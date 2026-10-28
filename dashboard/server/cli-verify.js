@@ -24,7 +24,9 @@ import { listSessionFiles, resolveSessionsDir, scanSessions } from "./scanner/sc
 
 const args = process.argv.slice(2);
 const flagIndex = args.indexOf("--sessions-dir");
-const sessionsDir = resolveSessionsDir(flagIndex >= 0 ? args[flagIndex + 1] : undefined);
+const sessionsDir = resolveSessionsDir(
+  flagIndex >= 0 ? args[flagIndex + 1] : process.env.PI_COST_SESSIONS_DIR,
+);
 
 const db = openDatabase();
 migrateUp(db);

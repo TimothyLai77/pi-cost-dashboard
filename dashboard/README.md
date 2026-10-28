@@ -16,19 +16,73 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 77 tests
+npm test             # 80 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
-its API from one port. `npm run dev` is the editing workflow.
+its API from one port. `npm run dev` is the editing workflow. `npm start`, `dev:server`,
+and the CLIs pass Node's `--env-file-if-exists=.env`, so a local `.env` is picked up
+without a dependency; the server module itself never reads a file, which keeps the test
+suite independent of whoever runs it.
 
-To see a live session on the dashboard, install the extension
-([../pi-extension/README.md](../pi-extension/README.md)) and point it here:
+To watch a live session locally, install the extension
+([../pi-extension/README.md](../pi-extension/README.md)) and point it at your own run:
 
 ```bash
 ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
 export PI_COST_URL=http://127.0.0.1:4870/api/ingest
+export PI_COST_TOKEN=$(grep PI_COST_TOKEN .env | cut -d= -f2)   # only if one is set
 ```
+
+## Deploy with Docker (LAN host)
+
+The intended deployment is the server on another machine on your LAN, with Pi machines
+reporting to it over HTTP. On the host machine:
+
+```bash
+cd dashboard
+cp .env.example .env
+openssl rand -hex 24        # paste the result as PI_COST_TOKEN in .env
+# For LAN access, set the host-side binding:
+#   PI_COST_BIND=0.0.0.0:4870:4870
+docker compose up -d --build
+docker compose ps           # "Up (healthy)"
+```
+
+What the container does and does not read:
+
+| | |
+|---|---|
+| SQLite | named volume `pi-cost-data` at `/app/data/cost.db` |
+| Sessions to scan | `PI_COST_SESSIONS_DIR`, which compose points at an empty `/app/no-sessions` |
+| Data source | `POST /api/ingest` reports from the Pi machines |
+| Writes | require `x-pi-cost-token` matching `PI_COST_TOKEN` |
+| Reads | open, so the dashboard opens in a browser with no secret |
+
+That is a push-fed deployment: nothing is read off the server host. To also scan history
+that lives on the server host, mount it read-only and point the scanner at it:
+
+```yaml
+volumes:
+  - pi-cost-data:/app/data
+  - /home/you/.pi/agent/sessions:/data/pi-sessions:ro
+# and in the environment block:
+#   PI_COST_SESSIONS_DIR: /data/pi-sessions
+```
+
+On each Pi machine, point the extension at the server and give it the same secret:
+
+```bash
+export PI_COST_URL=http://your-dashboard-host:4870/api/ingest   # name or LAN IP
+export PI_COST_TOKEN=<the same secret>
+```
+
+`docker compose down` keeps the volume; `docker compose down -v` deletes the database.
+The image has a healthcheck that polls `/api/health` every 30 seconds.
+
+The transport is plain HTTP, which is fine on a trusted LAN: the token rides in a header,
+so anyone who can sniff the wire can read it. If this ever leaves a trusted network, put
+it behind a TLS proxy and keep the port off the public interface.
 
 ## Layout
 
@@ -36,6 +90,9 @@ export PI_COST_URL=http://127.0.0.1:4870/api/ingest
 dashboard/
 ├── package.json
 ├── .env.example
+├── Dockerfile              # build the app, run only the server
+├── compose.yml             # LAN deployment: bind, token, volume, healthcheck
+├── .dockerignore
 ├── vite.config.js
 ├── server/
 │   ├── index.js            # express app; createApp() is exported for tests
@@ -81,7 +138,8 @@ dashboard/
 
 Money is integer micro-US dollars (`costMicros`) plus a formatted `costUsd` string.
 Reads are open; the two POST routes require `x-pi-cost-token` when `PI_COST_TOKEN` is
-set. The server binds `127.0.0.1`.
+set. `npm start` binds `127.0.0.1`; the container binds `0.0.0.0` internally and the
+host-side `PI_COST_BIND` in `compose.yml` decides who can reach it.
 
 ## Data model
 
@@ -108,9 +166,12 @@ rollup against the sum of its own facts.
   (116 kB gzipped), so the shell revalidates quickly.
 - **Provisional rows are marked, not trusted.** A push from the extension is a snapshot of
   a running session, so `last_source = 'push'` marks the row and the API reports
-  `provisional: true`. The UI labels those rows live. The next scan, which runs every 60 s,
-  replaces them with file-derived numbers, and `upsertSession` refuses to let a push
-  overwrite scanned numbers.
+  `provisional: true`. The UI labels a row live when it is push-sourced *and* its last
+  activity is within 15 minutes, which stays meaningful in a push-fed deployment where
+  every row is push-sourced. `upsertSession` refuses to let a push overwrite scanned
+  numbers, and refuses a push with fewer entries than the row already has, so a late
+  report from an older snapshot cannot roll a session's cost back. Repeated pushes from a
+  running session do update it, which is how a session's numbers climb in real time.
 - **Ingest validation rejects unknown keys.** A future version of the extension cannot
   quietly start sending transcript content, and a client that sends text gets a 400 naming
   the field.

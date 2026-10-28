@@ -9,19 +9,18 @@
   },
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev:server\" \"npm run dev:web\"",
-    "dev:server": "node --watch server/index.js",
+    "dev:server": "node --watch --env-file-if-exists=.env server/index.js",
     "dev:web": "vite",
     "build": "vite build",
-    "start": "node server/index.js",
-    "backfill": "node server/cli-backfill.js",
-    "verify": "node server/cli-verify.js",
-    "migrate": "node server/cli-migrate.js",
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "backfill": "node --env-file-if-exists=.env server/cli-backfill.js",
+    "verify": "node --env-file-if-exists=.env server/cli-verify.js",
+    "migrate": "node --env-file-if-exists=.env server/cli-migrate.js",
     "test": "node --test"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.0",
     "cors": "^2.8.6",
-    "dotenv": "^17.2.4",
     "express": "^5.2.1"
   },
   "devDependencies": {

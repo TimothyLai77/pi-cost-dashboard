@@ -1,0 +1,19 @@
+# Build context exclusions. node_modules and web/dist are rebuilt inside the image,
+# the database and .env are runtime state that must not end up baked into a layer, and
+# the test suite is not part of the server.
+node_modules/
+web/dist/
+data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.local
+*.log
+.git/
+.gitignore
+server/test/
+Dockerfile
+compose.yml
+README.md
+../

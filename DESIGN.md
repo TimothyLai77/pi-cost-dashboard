@@ -810,11 +810,15 @@ pi-cost-dashboard/
 ├── pi-extension/
 │   ├── README.md
 │   ├── pi-cost.ts              # the extension; symlink into ~/.pi/agent/extensions/
+│   ├── tsconfig.json           # type-check against Pi's declarations
 │   └── payload.schema.json     # ingest contract, versioned, also used by server validation
 └── dashboard/
     ├── README.md
     ├── package.json
     ├── .env.example
+    ├── Dockerfile              # build stage compiles the app, runtime runs the server
+    ├── compose.yml             # LAN deployment: bind, token, volume, healthcheck
+    ├── .dockerignore
     ├── server/
     │   ├── index.js            # express bootstrap + static serving
     │   ├── db.js               # better-sqlite3 handle, migration runner
@@ -852,11 +856,15 @@ Per `AGENTS.md`, nothing gets installed until approved.
 | `express` | server | HTTP, routing, static files |
 | `better-sqlite3` | server | Synchronous SQLite, prepared statements; ships a native module, needs a compiler toolchain |
 | `cors` | server | Only if vite dev server stays on a separate origin |
-| `dotenv` | server | `.env` for port, sessions dir, token |
 | `react`, `react-dom` | web | UI |
 | `vite` | web | Bundler, dev proxy |
 | `recharts` | web | Line and bar charts |
 | `concurrently` | dev root | Run server and vite together |
+
+`dotenv` was installed early and removed again: the server module now reads only
+`process.env`, and env files are loaded by Node's own `--env-file-if-exists` flag in the
+npm scripts (§12). Keeping the file read out of the module is what lets the test suite run
+without inheriting a developer's local config.
 
 Alternatives noted for later decisions: `node:http` in place of express, a CDN
 Chart.js page in place of the React app, `sqlite3` (async) in place of
@@ -873,17 +881,26 @@ pair for a synchronous, single-file DB.
 | Disable automatic reporting | `PI_COST_AUTO=0` | auto enabled when URL is set |
 | Request timeout, settled | `PI_COST_TIMEOUT_MS` | 5000 |
 | Report debounce floor | `PI_COST_MIN_INTERVAL_MS` | 10000 |
-| Shared secret header | `PI_COST_TOKEN` | unset (localhost only) |
+| Shared secret header | `PI_COST_TOKEN` | unset; set it for any non-loopback deployment |
 | Server port | `PI_COST_PORT` | 4870 |
-| Sessions directory | `PI_CODING_AGENT_SESSION_DIR` | `~/.pi/agent/sessions` |
-| Database path | `PI_COST_DB` | `dashboard/data/cost.db` |
+| Server bind address | `PI_COST_HOST` | `127.0.0.1`; the container overrides it to `0.0.0.0` |
+| Host-side port mapping | `PI_COST_BIND` | `127.0.0.1:4870:4870`; compose variable, `0.0.0.0:4870:4870` for LAN |
+| Sessions directory | `PI_COST_SESSIONS_DIR` | falls back to Pi's `PI_CODING_AGENT_SESSION_DIR`, then `~/.pi/agent/sessions`; the container points it at an empty directory |
+| Database path | `PI_COST_DB` | `dashboard/data/cost.db`; `/app/data/cost.db` in the container |
 
 The extension reads `process.env` directly. A future config file
 (`~/.pi/agent/extensions/pi-cost.json`) is listed as a follow-up so settings
 survive without a shell profile; env vars first because they need no parser.
 
-The server binds `127.0.0.1` by default and requires `x-pi-cost-token` when
-`PI_COST_TOKEN` is set. It is not internet-facing; do not expose it.
+The server reads `process.env` and does not load a `.env` file itself, because tests
+import the app factory from the same module and a file-based side effect would make the
+suite depend on the developer's local config. The npm scripts pass Node's
+`--env-file-if-exists=.env`, and compose supplies the container's environment. That is why
+`dotenv` is not a dependency.
+
+The server binds `127.0.0.1` for `npm start` and requires `x-pi-cost-token` when
+`PI_COST_TOKEN` is set. The Docker deployment publishes a LAN address on a trusted
+network; do not expose it beyond that.
 
 ## 13. Privacy
 
@@ -913,6 +930,27 @@ version cannot quietly start shipping transcript data into the database.
   next scan (§7). Retention is therefore "as long as the files exist," which
   keeps the dashboard and Pi's own session list consistent.
 
+### Deployment (decided: Docker, on a LAN host)
+
+The server runs on its own machine, reachable on the LAN, and Pi machines report to it.
+`dashboard/compose.yml` builds the image, publishes the port, mounts the database as a
+named volume, and health-checks `/api/health`.
+
+| | Behavior |
+|---|---|
+| Sessions scanned | `PI_COST_SESSIONS_DIR` points at an empty in-image directory, so the deployment is push-fed |
+| Host-side binding | `PI_COST_BIND`; `127.0.0.1:4870:4870` for a loopback test box, `0.0.0.0:4870:4870` for LAN access |
+| Inside the container | binds `0.0.0.0`, which is what makes a published port reachable |
+| Writes | `x-pi-cost-token` must match `PI_COST_TOKEN` |
+| Reads | open, chosen deliberately for a trusted LAN: the dashboard opens in a browser with no secret |
+| Transport | plain HTTP. On a trusted LAN that is acceptable; the token rides in a header, so wire sniffers would see it. Off a trusted network, put TLS in front |
+
+Two consequences of being push-fed, both verified by tests: a scan over a missing
+directory scans nothing instead of throwing, and the missing-file sweep only deletes rows
+tracked in `scan_state`, so pushed sessions survive it. Repeated pushes from the same
+session update the row, since a push may replace a push; the entry-count guard only
+rejects reports that are older than what is stored.
+
 ## 15. Test plan
 
 | Level | Checks |
@@ -926,6 +964,10 @@ version cannot quietly start shipping transcript data into the database.
 | Extension | Load with `pi --extension ./pi-cost.ts`; run `/pi-cost`; confirm totals match `/session` for the same session |
 | Extension perf | Point `PI_COST_URL` at a sink that sleeps 5 s; confirm the next prompt is not delayed, proving the report is not awaited |
 | Extension offline | Point at a dead port; confirm no notification, no error dialog, Pi unaffected |
+| Scanner, push-fed | Scan with no sessions directory returns zeros instead of throwing, and leaves pushed rows in place |
+| Ingest, push-fed | A push may replace a push; a push with fewer entries than the stored row is refused |
+| Token gate | Writes answer 401 without the header, 200 with it; reads answer 200 with no header |
+| LAN day buckets | Same range at `tzOffsetMinutes` 0, +240, and −240: totals identical, day splits differ |
 
 ---
 
@@ -954,8 +996,8 @@ touches Pi's hot path.
 
 1. **Chart library** — Recharts is assumed. No objection recorded yet, and it is
    the safe default for a line + bar dashboard.
-2. **Server process management** — run it by hand, `pm2`, systemd unit, or a
-   container alongside the existing `~/docker-compose.yml`? Affects only Phase 8.
+2. **Server process management** — **decided: Docker.** `dashboard/compose.yml` runs the
+   server on a LAN host with the database in a named volume. See §14.
 3. **Session display name** — Pi stores it via `session_info` entries, but many
    sessions have none. Fall back to the first user message? That would put prompt
    text in the database, which §13 rules out. Current design: fall back to the

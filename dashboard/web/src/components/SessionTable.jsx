@@ -1,12 +1,30 @@
 /**
  * Session list, newest activity first.
  *
- * A row tagged LIVE came from a running session's self-report and is provisional: the
- * next scan rewrites it from the session file. The tag exists so a live number is never
- * mistaken for a settled one.
+ * A row tagged LIVE is a self-reported snapshot from a running session, and its most recent
+ * activity is within the last few minutes. The provenance part (`provisional`) says the
+ * numbers came from the extension rather than a file scan; the recency part is what makes
+ * the tag mean "this session is running now", which matters in a deployment where the
+ * server never scans files and every row is push-sourced.
  */
 
 import { formatCost, formatTokens, shortProject } from "../api.js";
+
+/** Minutes of recent activity for a session to be tagged live. @type {number} */
+const LIVE_WINDOW_MINUTES = 15;
+
+/**
+ * Whether a session's last activity is inside the live window.
+ * @param {string | null} lastActivityAt ISO timestamp, as the API returns it
+ * @returns {boolean}
+ */
+const isActiveNow = (lastActivityAt) => {
+  if (!lastActivityAt) return false;
+  const then = Date.parse(lastActivityAt);
+  if (Number.isNaN(then)) return false;
+  const ageMinutes = (Date.now() - then) / 60000;
+  return ageMinutes >= 0 && ageMinutes <= LIVE_WINDOW_MINUTES;
+};
 
 /**
  * @param {{
@@ -49,7 +67,11 @@ export const SessionTable = ({ result, onPrev, onNext }) => {
               <td>
                 <span className="session-name">
                   {session.name ?? session.sessionId.slice(0, 8)}
-                  {session.provisional && <span className="live-tag">live</span>}
+                  {session.provisional && isActiveNow(session.lastActivityAt) && (
+                    <span className="live-tag" title="Self-reported by a running session">
+                      live
+                    </span>
+                  )}
                 </span>
               </td>
               <td className="hide-narrow">

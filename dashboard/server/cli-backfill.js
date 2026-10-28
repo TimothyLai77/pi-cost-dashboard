@@ -40,7 +40,9 @@ const flagValue = (name) => {
 
 const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
 const sessionsDir = resolveSessionsDir(
-  flagValue("--sessions-dir"),
+  // Same resolution order the server uses, so a container that sets PI_COST_SESSIONS_DIR
+  // backfills exactly what it will scan, not the home directory of whoever ran the CLI.
+  flagValue("--sessions-dir") ?? process.env.PI_COST_SESSIONS_DIR,
   readSessionDirSetting(join(home, ".pi", "agent")),
 );
 const topCount = Number(flagValue("--top") ?? 10);

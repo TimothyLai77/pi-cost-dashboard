@@ -126,11 +126,14 @@ export const App = () => {
           <h1>Pi session spend</h1>
           <p>What the agents cost, by day, project, and model.</p>
           {loading && <p className="eyebrow">Updating…</p>}
-          {!loading && health.data?.lastScanAt && (
+          {!loading && health.data && (
             <p className="eyebrow">
-              {health.data.sessionCount} sessions · {health.data.usageEventCount} usage records ·
-              scanned {health.data.lastScanAt.replace("T", " ").replace("Z", " UTC")} ·
-              rows marked live came from the extension, not a scan
+              {health.data.sessionCount} sessions · {health.data.usageEventCount} usage records
+              {health.data.lastScanAt
+                ? ` · last scan ${health.data.lastScanAt.replace("T", " ").replace("Z", " UTC")}`
+                : " · fed by session reports, nothing scanned from disk"}
+              {" · "}
+              rows marked live are self-reported by a session active in the last 15 minutes
             </p>
           )}
         </div>

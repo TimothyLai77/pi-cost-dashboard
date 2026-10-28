@@ -24,6 +24,8 @@ project and model filters.
 
 ## Quick start
 
+Local, on one machine:
+
 ```bash
 cd dashboard
 npm install
@@ -37,3 +39,27 @@ Then, for live sessions:
 ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
 export PI_COST_URL=http://127.0.0.1:4870/api/ingest
 ```
+
+## Deployment
+
+The intended shape is the dashboard server on its own machine, reachable on the LAN, with
+each Pi machine reporting its sessions to it. Containerized, with the SQLite file in a
+named volume:
+
+```bash
+cd dashboard
+cp .env.example .env          # set PI_COST_TOKEN and PI_COST_BIND=0.0.0.0:4870:4870
+docker compose up -d --build
+```
+
+On the Pi machines:
+
+```bash
+export PI_COST_URL=http://your-dashboard-host:4870/api/ingest
+export PI_COST_TOKEN=<the same secret>
+```
+
+That deployment is push-fed: the container scans nothing (`PI_COST_SESSIONS_DIR` points at
+an empty directory inside the image), and every number arrives over `POST /api/ingest`.
+Writes require the token, reads stay open. Details in
+[dashboard/README.md](./dashboard/README.md).
