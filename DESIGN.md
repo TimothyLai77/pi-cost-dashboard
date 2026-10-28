@@ -664,28 +664,40 @@ and it is the whole reason the report must not be awaited.
 | `agent_settled` | Yes | Yes, if you await | Yes, if you do not await |
 | `session_shutdown` | Yes | No prompts remain | Use for the final report, safe to await |
 
-### Automatic report: fire-and-forget
+### Automatic report: fire-and-forget, unref'd, interactive-only
+
+Two separate problems had to be solved, and the second one was not visible in the code
+reading:
+
+1. **Pi awaits `agent_settled`.** Awaiting a fetch in the handler delays the next prompt.
+   Solved by not awaiting.
+2. **An outstanding request keeps Node's event loop alive.** Not awaiting is not enough:
+   a print-mode run cannot exit while the request is open. Measured against a sink that
+   sleeps 5 seconds per request, `pi -p` took 6.0 s with automatic reporting against 1.0 s
+   with none — the 2 s cap did not save it, because the cap applies to the request that
+   is awaited, and the unfinished background request is what kept the process alive.
+
+Both are handled: the background request uses `node:http` so its socket can be `unref()`'d,
+which is not available through `fetch`; and automatic reports run only when
+`ctx.mode === "tui"`. A print-mode run has no prompts to protect, and the scanner reads
+its session file from disk seconds later, so skipping the report loses nothing.
 
 ```ts
-let inFlight: Promise<void> | null = null;
-let lastReportMs = 0;
+pi.on("agent_settled", async (_event, ctx) => {
+  if (!config.autoEnabled || disabledForSession) return;
+  if (ctx.mode !== "tui") return;                    // print/RPC runs: the scanner covers them
+  if (Date.now() - lastReportMs < config.minIntervalMs) return;
+  if (inFlight) return;                              // coalesce: one request outstanding
 
-pi.on("agent_settled", async (event, ctx) => {
-  if (!config.enabled || config.disabledForSession) return;
-  if (config.skipAborted && event.aborted) return;
-  if (Date.now() - lastReportMs < config.minIntervalMs) return;   // debounce
-  if (inFlight) return;                                          // coalesce
-
-  const payload = buildPayload(ctx, "agent_settled");            // 0.27 ms worst case
-  if (payload.totals.costMicros === 0 && payload.totals.totalTokens === 0) return;
+  const snapshot = buildSnapshot(ctx.sessionManager);
+  if (!snapshot) return;
+  if (snapshot.costMicros === 0 && snapshot.totalTokens === 0) return;
 
   lastReportMs = Date.now();
-  // Not awaited on purpose. The handler resolves immediately, Pi is idle,
-  // and the request lands in the background.
-  inFlight = fetch(config.url, { method: "POST", body: JSON.stringify(payload),
-                                signal: AbortSignal.timeout(config.timeoutMs) })
-    .then(() => { inFlight = null; })
-    .catch(() => { inFlight = null; });                          // never an unhandled rejection
+  // Not awaited. postBackground also unrefs the socket and resolves rather than
+  // rejecting, so this can neither stall the prompt nor keep the process alive.
+  inFlight = postBackground(config, buildPayload(snapshot, "agent_settled"))
+    .then(() => { inFlight = null; });
 });
 ```
 
@@ -719,31 +731,45 @@ Guards, all of them required:
 - Disabled when `PI_COST_URL` is unset. A Pi session with no dashboard
   configured performs no network work at all.
 
-### Performance budget
+### Performance budget (measured)
+
+Print-mode `pi -p` runs, same prompt and model, 5 samples per row:
+
+| Configuration | Elapsed |
+|---|---|
+| Extension absent | 986–1442 ms |
+| Extension reporting to a healthy server | 987–1825 ms |
+| Extension + sink that sleeps 5 s per request, before the fix | 5985–6078 ms |
+| Extension + the same 5 s sink, after the fix | 3174–3502 ms |
+
+The last row is the baseline plus the awaited 2 s shutdown cap: a dead server costs 2
+seconds at exit, once, and never costs a prompt anything. Reporting to a healthy server is
+indistinguishable from not reporting.
 
 | Work | Cost | Where |
 |---|---|---|
-| `computeSessionTotals` | 0.27 ms worst measured | in the handler, synchronous |
-| `JSON.stringify` of payload | ~1–3 ms for the 700 KB worst case | in the handler |
-| Handler overhead with fire-and-forget | ~0 (fetch not awaited) | — |
+| `buildSnapshot` | 0.27 ms worst measured (4,682 entries) | in the handler, synchronous |
+| Handler overhead | ~0 ms (not awaited, socket unref'd) | — |
 | Prompt stall | 0 ms by design | guarded by not awaiting |
+| Print-mode overhead | 0 ms | auto reports skip non-TUI modes |
 | Shutdown report | up to 2000 ms, once | only at exit, nothing left to block |
 
-If the stringify ever matters on a huge session, cap `events` in the payload to
-the most recent 200 entries and let the scanner fill in the rest from the file.
-The rollup totals stay exact either way. Listed as a known escape hatch, not
-implemented by default.
+If the payload stringify ever matters on a huge session, cap `events` in the payload to
+the most recent 200 entries and let the scanner fill in the rest from the file. The
+rollup totals stay exact either way. Listed as a known escape hatch, not implemented.
 
 ### Failure modes
 
 | Failure | Effect on Pi | Handling |
 |---|---|---|
-| Server down | None | `.catch()` swallows, report skipped, next scan recovers data |
-| Server slow | None while fire-and-forget | in-flight coalescing blocks further pushes |
+| Server down | None | request fails, is logged, report skipped; the scan recovers the data |
+| Server slow | None for prompts | in-flight coalescing blocks further pushes |
+| Slow server at exit (print mode) | up to 2 s once | awaited shutdown report with a 2 s cap |
+| Slow server at exit (interactive) | None | socket is unref'd, exit does not wait |
 | Pi killed (`kill -9`) | — | No push. Scan recovers; the file has everything |
-| Pi exits mid-request | — | Shutdown report is awaited with 2 s cap |
-| Extension throws | Pi reports the handler error and continues | Wrap bodies in try/catch |
-| Server rejects payload (422) | None | Log to `~/.pi/agent/extensions/pi-cost.log`, do not notify per attempt |
+| Extension throws | Pi reports the handler error and continues | Handler bodies are wrapped |
+| Server rejects payload (4xx) | None | Logged to `~/.pi/agent/extensions/pi-cost.log` |
+| Stale snapshot accepted nowhere | — | Server answers 200 with `applied: false`, so the client does not retry |
 
 ---
 
