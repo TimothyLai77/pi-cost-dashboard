@@ -37,7 +37,15 @@ const DayTooltip = ({ active, payload }) => {
       <span className="eyebrow">{point.day}</span>
       <div className="numeral">{formatCost(point.costMicros, point.costMicros > 0 && point.costMicros < 10000 ? 4 : 2)}</div>
       <div className="numeral" style={{ color: "var(--ink-faint)" }}>
-        {formatTokens(point.totalTokens)} tokens · {point.sessions} session{point.sessions === 1 ? "" : "s"}
+        {formatTokens(point.totalTokens)} tokens · {point.sessions} session{point.sessions === 1 ? "" : "s"} ·{" "}
+        {point.events} call{point.events === 1 ? "" : "s"}
+      </div>
+      {/* Token totals are dominated by cache reads: a long session re-reads its cached
+          context on every call, so "tokens" on a chart is throughput, not context size. */}
+      <div className="numeral tooltip-breakdown">
+        cache read {formatTokens(point.cacheReadTokens ?? 0)} · output{" "}
+        {formatTokens(point.outputTokens ?? 0)} · input {formatTokens(point.inputTokens ?? 0)} · cache write{" "}
+        {formatTokens(point.cacheWriteTokens ?? 0)}
       </div>
     </div>
   );
@@ -131,7 +139,11 @@ export const CostChart = ({ points, range, onSelectDay }) => {
             Days with no band at all are days with no sessions.
           </>
         ) : (
-          <>Every day in this range billed something. The grey band shows token volume for scale.</>
+          <>
+            Every day in this range billed something. The grey band shows token volume for scale.
+            Token counts are cumulative across model calls — each call re-reads the context it
+            already has — so they measure work done, not the size of a conversation.
+          </>
         )}
       </p>
     </>

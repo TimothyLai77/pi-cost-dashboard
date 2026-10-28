@@ -140,7 +140,6 @@ dashboard/
 | `GET` | `/api/summary?days=7` | today / 7d / 30d / all-time totals |
 | `GET` | `/api/daily?from&to&cwd&provider&tzOffsetMinutes` | chart points, gap-filled |
 | `GET` | `/api/hourly?day&cwd&provider&tzOffsetMinutes` | one day's 24 hours, zero-filled |
-| `GET` | `/api/sessions?limit&offset&cwd&provider&sort` | session list |
 | `GET` | `/api/sessions/:id` | one session with its usage facts |
 | `GET` | `/api/models` | spend by provider and model |
 | `GET` | `/api/filters` | project and provider values for the controls |
@@ -152,6 +151,16 @@ Money is integer micro-US dollars (`costMicros`) plus a formatted `costUsd` stri
 Reads are open; the two POST routes require `x-pi-cost-token` when `PI_COST_TOKEN` is
 set. `npm start` binds `127.0.0.1`; the container binds `0.0.0.0` internally and the
 host-side `PI_COST_BIND` in `compose.yml` decides who can reach it.
+
+Every aggregate also takes `subagents=1` (default, count nested sessions) or
+`subagents=0` (only what each session paid directly). A subagent is billed as its
+own session file and again inside its parent's tool-result usage, so totals count
+both by default; the session list marks nested rows with a `subagent` tag.
+
+Token figures on the charts are cumulative across model calls, not context size: a
+long session re-reads its cached context on every call, so cache reads dominate the
+total. Chart tooltips break the number out into cache read, output, input, and
+cache write.
 
 ## Data model
 

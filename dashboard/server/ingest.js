@@ -28,6 +28,7 @@ const TOP_LEVEL_KEYS = new Set([
   "cwd",
   "name",
   "parentSessionId",
+  "parentSessionFile",
   "startedAt",
   "lastActivityAt",
   "entryCount",
@@ -244,6 +245,10 @@ export const payloadToRecord = (payload) => ({
     sessionId: payload.sessionId,
     sessionFile: payload.sessionFile,
     parentSessionId: payload.parentSessionId ?? null,
+    parentSessionFile:
+      typeof payload.parentSessionFile === "string" && payload.parentSessionFile.length > 0
+        ? payload.parentSessionFile
+        : null,
     cwd: payload.cwd,
     name: payload.name ?? null,
     startedAt: payload.startedAt,

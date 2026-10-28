@@ -87,6 +87,7 @@ interface SessionSnapshot {
   sessionId: string;
   sessionFile: string;
   parentSessionId: string | null;
+  parentSessionFile: string | null;
   cwd: string;
   name: string | null;
   startedAt: string;
@@ -417,6 +418,9 @@ export const buildSnapshot = (sessionManager: SessionSource): SessionSnapshot | 
     sessionId,
     sessionFile: sessionManager.getSessionFile() ?? "",
     parentSessionId: parentSessionIdFromPath(headerInfo.parentSession),
+    // Pi records the parent as a file path. The server keeps the path alongside the id
+    // it reads out of the name, so it can show where the nested session came from.
+    parentSessionFile: typeof headerInfo.parentSession === "string" ? headerInfo.parentSession : null,
     cwd: headerInfo.cwd ?? sessionManager.getCwd(),
     name,
     startedAt: headerInfo.timestamp ?? lastActivityAt ?? new Date().toISOString(),
@@ -444,6 +448,7 @@ export const buildPayload = (snapshot: SessionSnapshot, reportedBy: "command" | 
   cwd: snapshot.cwd,
   name: snapshot.name,
   parentSessionId: snapshot.parentSessionId,
+  parentSessionFile: snapshot.parentSessionFile,
   startedAt: snapshot.startedAt,
   lastActivityAt: snapshot.lastActivityAt,
   entryCount: snapshot.entryCount,

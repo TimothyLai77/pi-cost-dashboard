@@ -72,6 +72,14 @@ export const SessionTable = ({ result, onPrev, onNext }) => {
                       live
                     </span>
                   )}
+                  {session.isSubagent && (
+                    <span
+                      className="subagent-tag"
+                      title="Nested session. Pi bills this work here and again as its parent session's tool-result usage."
+                    >
+                      subagent
+                    </span>
+                  )}
                 </span>
               </td>
               <td className="hide-narrow">

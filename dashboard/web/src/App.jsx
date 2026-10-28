@@ -1,3 +1,6 @@
+/** localStorage key holding the subagent-spend choice. @type {string} */
+const SUBAGENTS_STORAGE_KEY = "pi-cost-subagents";
+
 /**
  * Dashboard root: owns the filter state the chart, model list, and session table share.
  *
@@ -73,16 +76,31 @@ export const App = () => {
   // UTC is how the data is stored. Bucketing by local day is a display choice, so it
   // defaults off and is applied as an offset the server computes in SQL.
   const [localDays, setLocalDays] = useState(false);
+  // Pi bills a subagent as its own session and again inside its parent's toolResult usage.
+  // Counting both is the honest total, so it is the default; you can drop the nested ones.
+  const [includeSubagents, setIncludeSubagents] = useState(
+    () => localStorage.getItem(SUBAGENTS_STORAGE_KEY) !== "off",
+  );
+  const setSubagents = (checked) => {
+    setIncludeSubagents(checked);
+    try {
+      localStorage.setItem(SUBAGENTS_STORAGE_KEY, checked ? "on" : "off");
+    } catch {
+      // A blocked localStorage means the choice just does not persist. Not a reason to break the page.
+    }
+  };
   // The day whose hours are showing, set by clicking a bar. Null means the daily view.
   const [drillDay, setDrillDay] = useState(null);
   const theme = useTheme();
 
   const range = RANGES[rangeIndex];
   const tzOffsetMinutes = localDays ? -new Date().getTimezoneOffset() : 0;
+  // Sent as 1/0 on every aggregate so the whole page answers the same question.
+  const subagents = includeSubagents ? 1 : 0;
 
-  const summary = useApi("/api/summary", { days: range.days ?? 7, _k: refreshKey });
+  const summary = useApi("/api/summary", { days: range.days ?? 7, subagents, _k: refreshKey });
   const filters = useApi("/api/filters", { _k: refreshKey });
-  const models = useApi("/api/models", { _k: refreshKey });
+  const models = useApi("/api/models", { subagents, _k: refreshKey });
 
   // "all" sends no bounds, so the server returns the full recorded history.
   const rangeParams = useMemo(() => {
@@ -97,6 +115,7 @@ export const App = () => {
     cwd: project,
     provider,
     tzOffsetMinutes,
+    subagents,
     _k: refreshKey,
   });
 
@@ -104,6 +123,7 @@ export const App = () => {
     limit: 15,
     offset: page * 15,
     cwd: project,
+    subagents,
     _k: refreshKey,
   });
 
@@ -114,6 +134,7 @@ export const App = () => {
     cwd: project,
     provider,
     tzOffsetMinutes,
+    subagents,
     _k: refreshKey,
   });
 
@@ -209,6 +230,16 @@ export const App = () => {
           <label title="Bucket days by your browser's timezone instead of UTC">
             <input type="checkbox" checked={localDays} onChange={(event) => setLocalDays(event.target.checked)} />
             Local days
+          </label>
+          <label
+            title="A subagent is billed as its own session and again inside its parent's tool-result usage. Counting both is the full spend; turning this off shows only what each session paid directly."
+          >
+            <input
+              type="checkbox"
+              checked={includeSubagents}
+              onChange={(event) => setSubagents(event.target.checked)}
+            />
+            Subagent spend
           </label>
           <button type="button" className="ghost" onClick={reloadAll}>
             Refresh

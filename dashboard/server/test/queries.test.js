@@ -9,11 +9,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { currentVersion, openDatabase, migrateUp } from "../db.js";
+import { currentVersion, listMigrations, openDatabase, migrateUp } from "../db.js";
+
+/** Newest migration version a fresh database should report. @type {number} */
+const LATEST_VERSION = listMigrations().at(-1).version;
 import { upsertSession } from "../upsert.js";
 import { aggregateSession } from "../scanner/aggregate.js";
 import {
@@ -41,6 +44,23 @@ const seededDb = () => {
   const db = openDatabase(":memory:");
   migrateUp(db);
   for (const fixture of ["full-usage.jsonl", "usage-only.jsonl"]) {
+    const { session, events } = aggregateSession(
+      join(import.meta.dirname, "fixtures", fixture),
+    );
+    upsertSession(db, session, events, "scan");
+  }
+  return db;
+};
+
+/**
+ * A migrated in-memory database holding the fixture sessions plus the nested subagent.
+ * The subagent bills 7,000 micros on 2026-01-01 and names full-usage as its parent.
+ * @returns {import("better-sqlite3").Database}
+ */
+const seededDbWithSubagent = () => {
+  const db = openDatabase(":memory:");
+  migrateUp(db);
+  for (const fixture of ["full-usage.jsonl", "usage-only.jsonl", "subagent.jsonl"]) {
     const { session, events } = aggregateSession(
       join(import.meta.dirname, "fixtures", fixture),
     );
@@ -206,7 +226,7 @@ test("getHealth reports counts, schema version, and last scan", () => {
   assert.equal(health.status, "ok");
   assert.equal(health.sessionCount, 2);
   assert.equal(health.usageEventCount, 10);
-  assert.equal(health.schemaVersion, 1);
+  assert.equal(health.schemaVersion, currentVersion(db), "the applied migration version");
   assert.equal(health.sessionFilesOnDisk, 2);
   assert.equal(health.lastScanAt, null, "no scan_state rows in a seeded database");
   db.close();
@@ -292,6 +312,108 @@ test("getHourlyCost honours the project and provider filters", () => {
 
   const missing = getHourlyCost(db, { day, provider: "not-a-provider" });
   assert.equal(missing.totalCostMicros, 0);
+  db.close();
+});
+
+test("aggregateSession reads the parent session UUID out of the header's path", () => {
+  const { session } = aggregateSession(join(import.meta.dirname, "fixtures", "subagent.jsonl"));
+
+  // Pi writes a file path there; the dashboard wants the id inside it.
+  assert.equal(session.parentSessionId, "11111111-1111-4111-8111-111111111111");
+  assert.ok(session.parentSessionFile.endsWith("_11111111-1111-4111-8111-111111111111.jsonl"));
+});
+
+test("migration 002 turns stored parent paths into parent ids", () => {
+  const db = openDatabase(":memory:");
+  db.exec(readFileSync(join(import.meta.dirname, "..", "migrations", "001_init.sql"), "utf8"));
+
+  // What the scanner wrote before the fix: the whole path, in the id column.
+  db.prepare(
+    `INSERT INTO sessions (session_id, session_file, parent_session_id, cwd, started_at, last_activity_at, entry_count, last_source)
+     VALUES ('child', '/x/child.jsonl', '/data/2026-01-01T10-00-00-000Z_11111111-1111-4111-8111-111111111111.jsonl', '/x', '2026-01-01T10:00:00.000Z', '2026-01-01T10:00:00.000Z', 1, 'scan')`,
+  ).run();
+
+  db.exec(readFileSync(join(import.meta.dirname, "..", "migrations", "002_parent_link.sql"), "utf8"));
+
+  const row = db.prepare("SELECT parent_session_id, parent_session_file FROM sessions").get();
+  assert.equal(row.parent_session_id, "11111111-1111-4111-8111-111111111111");
+  assert.ok(row.parent_session_file.endsWith(".jsonl"));
+  db.close();
+});
+
+test("totals include nested subagent spend by default and can exclude it", () => {
+  const db = seededDbWithSubagent();
+  const withSubagents = getSummary(db, null, { includeSubagents: true }).allTime;
+  const without = getSummary(db, null, { includeSubagents: false }).allTime;
+
+  // subagent.jsonl bills 1000 + 2000 + 4000 = 7000 micros of the total.
+  assert.equal(withSubagents.costMicros - without.costMicros, 7000);
+  assert.equal(withSubagents.sessions - without.sessions, 1);
+  db.close();
+});
+
+test("getSessions flags subagent rows and can drop them", () => {
+  const db = seededDbWithSubagent();
+  const all = getSessions(db, { limit: 50 });
+  const nested = all.sessions.filter((session) => session.isSubagent);
+  assert.equal(nested.length, 1);
+  assert.equal(nested[0].parentSessionId, "11111111-1111-4111-8111-111111111111");
+
+  const direct = getSessions(db, { limit: 50, includeSubagents: false });
+  assert.equal(direct.sessions.some((session) => session.isSubagent), false);
+  assert.equal(all.total - direct.total, 1);
+  db.close();
+});
+
+test("daily and hourly points break tokens out by kind", () => {
+  const db = seededDb();
+  const daily = getDailyCost(db, { from: "2026-01-01", to: "2026-01-01" }).points[0];
+  assert.ok(daily.cacheReadTokens > 0, "cache reads are reported");
+  assert.ok(daily.outputTokens > 0, "output is reported");
+  assert.equal(
+    daily.totalTokens,
+    daily.inputTokens + daily.outputTokens + daily.cacheReadTokens + daily.cacheWriteTokens,
+  );
+
+  const hourly = getHourlyCost(db, { day: "2026-01-01" }).points.find((p) => p.costMicros > 0);
+  assert.equal(
+    hourly.totalTokens,
+    hourly.inputTokens + hourly.outputTokens + hourly.cacheReadTokens + hourly.cacheWriteTokens,
+  );
+  assert.ok(hourly.events > 0, "the number of billed calls is reported");
+  db.close();
+});
+
+test("the subagents flag filters every aggregate and rejects a non-flag", async () => {
+  const db = seededDbWithSubagent();
+  await withServer(db, async (base) => {
+    const summaryAll = await (await fetch(`${base}/api/summary`)).json();
+    const summaryDirect = await (await fetch(`${base}/api/summary?subagents=0`)).json();
+    assert.equal(summaryAll.allTime.costMicros - summaryDirect.allTime.costMicros, 7000);
+
+    const dailyAll = await (await fetch(`${base}/api/daily?from=2026-01-01&to=2026-01-01`)).json();
+    const dailyDirect = await (
+      await fetch(`${base}/api/daily?from=2026-01-01&to=2026-01-01&subagents=0`)
+    ).json();
+    assert.equal(dailyAll.totalCostMicros - dailyDirect.totalCostMicros, 7000);
+
+    const hourlyAll = await (await fetch(`${base}/api/hourly?day=2026-01-01`)).json();
+    const hourlyDirect = await (await fetch(`${base}/api/hourly?day=2026-01-01&subagents=0`)).json();
+    assert.equal(hourlyAll.totalCostMicros - hourlyDirect.totalCostMicros, 7000);
+
+    const modelsAll = await (await fetch(`${base}/api/models`)).json();
+    const modelsDirect = await (await fetch(`${base}/api/models?subagents=0`)).json();
+    const sum = (rows) => rows.reduce((total, row) => total + row.costMicros, 0);
+    assert.equal(sum(modelsAll) - sum(modelsDirect), 7000);
+
+    const sessionsAll = await (await fetch(`${base}/api/sessions?limit=50`)).json();
+    const sessionsDirect = await (await fetch(`${base}/api/sessions?limit=50&subagents=0`)).json();
+    assert.equal(sessionsAll.total - sessionsDirect.total, 1);
+
+    const bad = await fetch(`${base}/api/summary?subagents=maybe`);
+    assert.equal(bad.status, 400);
+    assert.equal((await bad.json()).parameter, "subagents");
+  });
   db.close();
 });
 
@@ -411,7 +533,7 @@ test("openDatabase creates the parent directory and the database file", () => {
     assert.equal(existsSync(target), true, "the file is created, parent directory included");
 
     const reopened = openDatabase(target);
-    assert.equal(currentVersion(reopened), 1, "the migration is recorded on disk");
+    assert.equal(currentVersion(reopened), LATEST_VERSION, "every migration is recorded on disk");
     assert.equal(migrateUp(reopened).applied.length, 0, "reopening applies nothing");
     reopened.close();
   } finally {

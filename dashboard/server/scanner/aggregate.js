@@ -38,6 +38,22 @@ const toMicroDollars = (dollars) =>
   Number.isFinite(dollars) ? Math.round(dollars * MICRO_DOLLARS_PER_DOLLAR) : 0;
 
 /**
+ * Pull the parent session's UUID out of the path Pi records in `parentSession`.
+ *
+ * Pi names a session file `<started>_<uuid>.jsonl` and writes that whole path into a
+ * forked session's header. The dashboard wants the id, so the 36-character UUID is read
+ * out of the name and the path is kept separately.
+ *
+ * @param {unknown} parentSession Value of the header's `parentSession`; a path string or absent
+ * @returns {string | null} The parent session's UUID, null when there is no parent
+ */
+const parentSessionIdFromPath = (parentSession) => {
+  if (typeof parentSession !== "string") return null;
+  const match = parentSession.match(/_([0-9a-fA-F-]{36})\.jsonl$/);
+  return match ? match[1] : null;
+};
+
+/**
  * Read the `usage` block from a session entry, when that entry type contributes one.
  *
  * @param {any} entry A parsed session entry
@@ -122,6 +138,7 @@ export const aggregateSession = (filePath, fileContents) => {
     sessionId: null,
     sessionFile: filePath,
     parentSessionId: null,
+    parentSessionFile: null,
     cwd: null,
     name: null,
     startedAt: null,
@@ -164,7 +181,12 @@ export const aggregateSession = (filePath, fileContents) => {
     if (entry.type === "session") {
       session.sessionId = entry.id ?? null;
       session.cwd = entry.cwd ?? null;
-      session.parentSessionId = entry.parentSession ?? null;
+      // Pi records a forked session's parent as a file path named
+      // `<started>_<uuid>.jsonl`, so the id has to be read out of it. Storing the path in
+      // parent_session_id makes a path look like a session id to every consumer.
+      session.parentSessionFile =
+        typeof entry.parentSession === "string" ? entry.parentSession : null;
+      session.parentSessionId = parentSessionIdFromPath(entry.parentSession);
       session.startedAt = entry.timestamp ?? null;
       continue;
     }

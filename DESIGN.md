@@ -95,6 +95,36 @@ A model with no price configured reports tokens at zero cost.
 assistant message regardless of `stopReason`, because the request was sent and
 billed. Skipping aborted messages under-reports.
 
+**A token total is throughput, not the size of a conversation.** Each assistant
+message reports what *that call* used: new input, its output, and the cached
+prefix the model re-read. With prompt caching, a late call in a long session
+re-reads most of the context, so the session's token total grows with the number
+of model calls. Measured on one long session on this machine:
+
+| Measurement | Value |
+|---|---|
+| Assistant calls | 652 |
+| Cache reads | 76,760,410 (99.2% of all tokens) |
+| Input + output | 226,969 + 359,984 |
+| Session total | 77,347,363 tokens, $10.13 |
+| Median tokens per call | 110,996 |
+| Largest single call | 245,790 (inside the 256k window) |
+| Cache collapses (compaction, cache reset) | 5, each seen as a drop back to ~9k |
+
+So a 77M session total is not a claim about a 77M-token context. The peak call is
+245,790. The dashboard charts token volume for shape, and breaks it out by kind
+(cache read, output, input, cache write) so the dominant term is visible.
+
+**Nested subagent work is billed in two places.** Pi writes a subagent as its own
+session file, and the parent records a `toolResult` usage entry summarising the
+same nested calls. Both are real charges. Measured on this machine: 19 child
+sessions (1,727,685 tokens, $0.0142) and 6 parent-side tool-result entries
+(1,584,179 tokens, $0.0000, parent-side entries carry no price). So token totals
+overlap by about 0.13% and dollar totals barely move, but the overlap is real.
+Totals include both by default; `?subagents=0` on any aggregate query drops the
+child sessions so you can read "what each session paid directly", and the session
+list marks nested rows.
+
 ### Measured against this machine
 
 Numbers below came from reading the live session directory, and they drive
@@ -217,6 +247,7 @@ CREATE TABLE sessions (
   session_id          TEXT    PRIMARY KEY,              -- Pi session UUID from header
   session_file        TEXT    NOT NULL UNIQUE,          -- absolute path
   parent_session_id   TEXT,                             -- set by /fork, /clone
+  parent_session_file TEXT,                             -- the path Pi recorded there
   cwd                 TEXT    NOT NULL,                 -- header.cwd, the "project"
   name                TEXT,                             -- latest session_info name
   started_at          TEXT    NOT NULL,                 -- header.timestamp, ISO-8601 UTC
@@ -345,6 +376,13 @@ Self-reference on `parent_session_id` is deliberately not a foreign key with
 cascade: deleting a child session must not delete its parent, and Pi deletes
 session files on its own.
 
+Pi's header writes the parent as a **file path** (`<started>_<uuid>.jsonl`). The
+scanner reads the 36-character UUID out of it into `parent_session_id` and keeps
+the path in `parent_session_file`, so an id column only ever holds ids. Migration
+`002_parent_link` repairs rows written before that, moving the stored path to the
+file column and recovering the id from it. `parent_session_id IS NOT NULL` is what
+marks a row as a nested subagent session.
+
 ---
 
 ## 5. Ingest contract
@@ -461,6 +499,10 @@ Server-side, in this order:
   ]
 }
 ```
+
+Every aggregate accepts `subagents=1` (default, count nested subagent sessions)
+or `subagents=0` (count only what each session paid directly). Any other value is
+a 400 naming the parameter.
 
 `/api/health` is the operator's sanity check: if `sessionCount` stops tracking
 the file count, the scanner is broken.

@@ -52,7 +52,13 @@ const HourTooltip = ({ active, payload }) => {
       </span>
       <div className="numeral">{formatCost(point.costMicros, point.costMicros > 0 && point.costMicros < 10000 ? 4 : 2)}</div>
       <div className="numeral" style={{ color: "var(--ink-faint)" }}>
-        {formatTokens(point.totalTokens)} tokens · {point.sessions} session{point.sessions === 1 ? "" : "s"}
+        {formatTokens(point.totalTokens)} tokens · {point.sessions} session{point.sessions === 1 ? "" : "s"} ·{" "}
+        {point.events} call{point.events === 1 ? "" : "s"}
+      </div>
+      <div className="numeral tooltip-breakdown">
+        cache read {formatTokens(point.cacheReadTokens ?? 0)} · output{" "}
+        {formatTokens(point.outputTokens ?? 0)} · input {formatTokens(point.inputTokens ?? 0)} · cache write{" "}
+        {formatTokens(point.cacheWriteTokens ?? 0)}
       </div>
     </div>
   );
@@ -128,7 +134,8 @@ export const HourChart = ({ points, day, tzOffsetMinutes = 0 }) => {
         <span className="numeral">{activeHours}</span> of 24 hours used the agent,{" "}
         <span className="numeral">{billedHours}</span> of them billed something. Hours are clock
         hours in <span className="numeral">{zone}</span>
-        {zone === "UTC" ? " (turn on Local days to bucket them by your clock)" : "."}
+        {zone === "UTC" ? " (turn on Local days to bucket them by your clock)." : "."} Token counts
+        are cumulative across model calls, not the size of the context.
       </p>
     </>
   );

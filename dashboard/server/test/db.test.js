@@ -40,28 +40,38 @@ const migratedDb = () => {
  */
 const loadFixture = (name) => aggregateSession(join(fixturesDir, name));
 
-test("migration runner applies 001 once and reports the version", () => {
+test("migrations apply once and report the current version", () => {
   const db = migratedDb();
+  const migrations = listMigrations();
+  const latest = migrations[migrations.length - 1].version;
 
-  assert.equal(currentVersion(db), 1);
+  assert.equal(currentVersion(db), latest);
   assert.equal(migrateUp(db).applied.length, 0, "a second run applies nothing");
-  assert.deepEqual(listMigrations().map((m) => m.version), [1]);
+  assert.deepEqual(
+    migrations.map((m) => m.version),
+    [...migrations.map((m) => m.version)].sort((a, b) => a - b),
+    "migrations are numbered in ascending order",
+  );
 
   db.close();
 });
 
-test("migration down removes every object 001 created", () => {
+test("migration down rolls back the newest migration only", () => {
   const db = migratedDb();
+  const migrations = listMigrations();
+  const newest = migrations[migrations.length - 1];
   const { rolledBack, version } = migrateDown(db);
 
-  assert.equal(rolledBack, "001_init");
-  assert.equal(version, 0);
+  assert.equal(rolledBack, newest.name);
+  assert.equal(version, newest.version - 1);
 
+  // The base schema is still there; only the newest migration's objects went away.
   const remaining = db
     .prepare("SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name")
     .all()
     .map((row) => row.name);
-  assert.deepEqual(remaining, ["schema_meta"], "only the migration bookkeeping table remains");
+  assert.ok(remaining.includes("sessions"), "sessions survives the newest rollback");
+  assert.equal(remaining.includes("idx_sessions_parent"), false, "002's index is gone");
 
   db.close();
 });

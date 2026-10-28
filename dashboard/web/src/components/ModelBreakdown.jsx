@@ -27,7 +27,14 @@ export const ModelBreakdown = ({ models }) => {
           <span className="amount numeral">
             {model.costMicros === 0 ? "free" : formatCost(model.costMicros, model.costMicros < 10000 ? 4 : 2)}
           </span>
-          <span className="meta numeral">{formatTokens(model.totalTokens)} tok</span>
+          <span
+            className="meta numeral"
+            title={`cache read ${formatTokens(model.cacheReadTokens ?? 0)} · output ${formatTokens(
+              model.outputTokens ?? 0,
+            )} · input ${formatTokens(model.inputTokens ?? 0)}`}
+          >
+            {formatTokens(model.totalTokens)} tok
+          </span>
           <span className="bar-track" aria-hidden="true">
             <span
               className="bar-fill"

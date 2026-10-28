@@ -117,11 +117,14 @@ test("an unpriced model costs zero and is reported, not skipped", () => {
   assert.equal(session.totalTokens, 10000);
 });
 
-test("forked sessions keep the parent session path", () => {
+test("forked sessions record the parent's session id, plus the file it came from", () => {
   const { session } = aggregateSession(fixturePath("forked-zero-cost.jsonl"));
 
+  // Pi writes a path into the header; the id is read out of it so parent_session_id
+  // holds an id, and the path is kept separately.
+  assert.equal(session.parentSessionId, "00000000-0000-4000-8000-000000000000");
   assert.equal(
-    session.parentSessionId,
+    session.parentSessionFile,
     "/home/user/.pi/agent/sessions/--home-user-project-c--/2026-01-01T00-00-00-000Z_00000000-0000-4000-8000-000000000000.jsonl",
   );
 });

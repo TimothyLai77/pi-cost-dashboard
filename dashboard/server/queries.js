@@ -57,26 +57,74 @@ const dayExpression = (tzOffsetMinutes) => {
  * @param {number} [days] Window length in days, counted backwards from today (UTC)
  * @returns {{ window: object, allTime: object, today: object, last7Days: object, last30Days: object }}
  */
-export const getSummary = (db, days = 7) => {
+/**
+ * SQL condition that drops nested subagent sessions, when the caller asked for that.
+ *
+ * Pi bills a subagent twice over: the child session file carries its own usage, and the
+ * parent records a toolResult usage entry summarising the same nested calls. Both are real
+ * spend, so totals include both by default. The filter exists so you can read the ledger
+ * as "money this session paid directly" without the nested half appearing again.
+ *
+ * Needs the sessions table aliased as `s` in the query.
+ *
+ * @param {boolean} [includeSubagents] Default true: count nested sessions too
+ * @returns {string} An `AND ...` clause, empty when nothing is excluded
+ */
+const subagentCondition = (includeSubagents = true) =>
+  includeSubagents ? "" : " AND s.parent_session_id IS NULL";
+
+/**
+ * Totals for a window, and for all time.
+ *
+ * Sessions are counted by distinct sessions contributing usage in the window; cost is
+ * counted by when the usage happened, which is the same basis the chart uses.
+ *
+ * Token totals are broken out by kind because "tokens" on a chart is a sum of four very
+ * different things. Cache reads dominate - a long session re-reads its cached context on
+ * every model call - so a 77M figure is throughput across hundreds of calls, not the size
+ * of a conversation.
+ *
+ * @param {import("better-sqlite3").Database} db
+ * @param {number | null} [days] Window length in days, counted backwards from today (UTC); null means all time
+ * @param {{ includeSubagents?: boolean }} [options]
+ * @returns {{ window: object, allTime: object, today: object, last7Days: object, last30Days: object }}
+ */
+export const getSummary = (db, days = 7, options = {}) => {
+  const includeSubagents = options.includeSubagents !== false;
+  // Excluding subagents needs the sessions table, so the join is only paid for when used.
+  const sessionsJoin = includeSubagents ? "" : "JOIN sessions s ON s.session_id = u.session_id";
+  const subagents = subagentCondition(includeSubagents);
+
   const totalsFor = (dayCount) => {
     // Cost is bucketed by when the usage happened, the same basis the chart uses, so a
     // session resumed days later bills its new usage to the later day.
     const where = dayCount === null
-      ? ""
-      : `WHERE date(u.occurred_at) >= date('now', '-${Math.trunc(dayCount) - 1} days')`;
+      ? subagents.trim().length > 0
+        ? `WHERE TRUE ${subagents}`
+        : ""
+      : `WHERE date(u.occurred_at) >= date('now', '-${Math.trunc(dayCount) - 1} days')${subagents}`;
     const row = db
       .prepare(
         `SELECT COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
                 COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+                COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+                COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
+                COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
                 COUNT(DISTINCT u.session_id)     AS sessions,
                 COUNT(*)                         AS events
          FROM usage_events u
+         ${sessionsJoin}
          ${where}`,
       )
       .get();
     return {
       ...money(row.cost_micros),
       totalTokens: row.total_tokens,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cacheReadTokens: row.cache_read_tokens,
+      cacheWriteTokens: row.cache_write_tokens,
       sessions: row.sessions,
       events: row.events,
     };
@@ -124,6 +172,9 @@ export const getDailyCost = (db, options = {}) => {
     filters.push("u.provider = @provider");
     params.provider = options.provider;
   }
+  if (options.includeSubagents === false) {
+    filters.push("s.parent_session_id IS NULL");
+  }
   const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
   const rows = db
@@ -131,6 +182,11 @@ export const getDailyCost = (db, options = {}) => {
       `SELECT ${day} AS day,
               COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
               COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+              COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
+              COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
+              COUNT(*)                         AS events,
               COUNT(DISTINCT u.session_id)     AS sessions
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
@@ -171,12 +227,22 @@ export const getDailyCost = (db, options = {}) => {
       const row = pointsByDay.get(dayValue) ?? {
         cost_micros: 0,
         total_tokens: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        events: 0,
         sessions: 0,
       };
       points.push({
         day: dayValue,
         ...money(row.cost_micros),
         totalTokens: row.total_tokens,
+        inputTokens: row.input_tokens,
+        outputTokens: row.output_tokens,
+        cacheReadTokens: row.cache_read_tokens,
+        cacheWriteTokens: row.cache_write_tokens,
+        events: row.events,
         sessions: row.sessions,
       });
     }
@@ -236,6 +302,9 @@ export const getHourlyCost = (db, options = {}) => {
     filters.push("u.provider = @provider");
     params.provider = options.provider;
   }
+  if (options.includeSubagents === false) {
+    filters.push("s.parent_session_id IS NULL");
+  }
   const whereClause = `WHERE ${filters.join(" AND ")}`;
 
   const rows = db
@@ -243,6 +312,11 @@ export const getHourlyCost = (db, options = {}) => {
       `SELECT ${hour} AS hour,
               COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
               COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+              COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
+              COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
+              COUNT(*)                         AS events,
               COUNT(DISTINCT u.session_id)     AS sessions
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
@@ -269,12 +343,26 @@ export const getHourlyCost = (db, options = {}) => {
     .all({ day: options.day });
 
   const points = hours.map(({ hour: hourValue }) => {
-    const row = pointsByHour.get(hourValue) ?? { cost_micros: 0, total_tokens: 0, sessions: 0 };
+    const row = pointsByHour.get(hourValue) ?? {
+      cost_micros: 0,
+      total_tokens: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      events: 0,
+      sessions: 0,
+    };
     return {
       hour: hourValue,
       label: hourValue.slice(11, 16),
       ...money(row.cost_micros),
       totalTokens: row.total_tokens,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cacheReadTokens: row.cache_read_tokens,
+      cacheWriteTokens: row.cache_write_tokens,
+      events: row.events,
       sessions: row.sessions,
     };
   });
@@ -315,6 +403,9 @@ export const getSessions = (db, options = {}) => {
     );
     params.provider = options.provider;
   }
+  if (options.includeSubagents === false) {
+    filters.push("s.parent_session_id IS NULL");
+  }
   const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
   const orderBy = options.sort === "cost" ? "cost_micros DESC" : "last_activity_at DESC";
 
@@ -343,6 +434,9 @@ export const getSessions = (db, options = {}) => {
       sessionId: row.session_id,
       sessionFile: row.session_file,
       parentSessionId: row.parent_session_id,
+      // Pi bills a subagent as its own session and again inside the parent's toolResult
+      // usage, so the list marks which rows are the nested ones.
+      isSubagent: row.parent_session_id !== null,
       cwd: row.cwd,
       name: row.name,
       startedAt: row.started_at,
@@ -420,15 +514,33 @@ export const getSessionById = (db, sessionId) => {
  * @param {import("better-sqlite3").Database} db
  * @returns {{ provider: string | null, modelId: string | null, costMicros: number, costUsd: string, totalTokens: number, events: number }[]}
  */
-export const getModelCost = (db) =>
+export const getModelCost = (db, options = {}) =>
   db
-    .prepare("SELECT provider, model_id, cost_micros, total_tokens, events FROM model_cost ORDER BY cost_micros DESC")
+    .prepare(
+      `SELECT u.provider, u.model_id,
+              COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
+              COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+              COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
+              COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
+              COUNT(*)                         AS events
+       FROM usage_events u
+       JOIN sessions s ON s.session_id = u.session_id
+       WHERE TRUE ${subagentCondition(options.includeSubagents)}
+       GROUP BY u.provider, u.model_id
+       ORDER BY cost_micros DESC`,
+    )
     .all()
     .map((row) => ({
       provider: row.provider,
       modelId: row.model_id,
       ...money(row.cost_micros),
       totalTokens: row.total_tokens,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cacheReadTokens: row.cache_read_tokens,
+      cacheWriteTokens: row.cache_write_tokens,
       events: row.events,
     }));
 

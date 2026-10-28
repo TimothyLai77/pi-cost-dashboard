@@ -58,6 +58,32 @@ const parseInteger = (rawValue) => {
 };
 
 /**
+ * Parse a 0/1 query flag.
+ * @param {unknown} rawValue
+ * @param {boolean} fallback Value to use when the parameter is absent
+ * @returns {{ value: boolean } | { invalid: true }} invalid when the value is not a flag
+ */
+const parseFlag = (rawValue, fallback) => {
+  if (rawValue === undefined || rawValue === "") return { value: fallback };
+  if (rawValue === "1" || rawValue === "true") return { value: true };
+  if (rawValue === "0" || rawValue === "false") return { value: false };
+  return { invalid: true };
+};
+
+/**
+ * Answer with the standard invalid-parameter body when a flag is not a flag.
+ * @param {string} name Parameter name to report
+ * @param {unknown} received What the client sent
+ * @returns {(req: any, res: any) => boolean} true when it answered, false when the value is fine
+ */
+const rejectBadFlag = (name, received) => (req, res) => {
+  if (received === undefined || received === "") return false;
+  if (received === "1" || received === "0" || received === "true" || received === "false") return false;
+  res.status(400).json({ error: "invalid_parameter", parameter: name, received });
+  return true;
+};
+
+/**
  * Validate a YYYY-MM-DD date string.
  * @param {unknown} rawValue
  * @returns {boolean}
@@ -115,11 +141,19 @@ export const createApp = (db, dependencies) => {
 
   app.get(
     "/api/summary",
-    requireIntegers((req, res) => res.json(getSummary(db, req.parsedParams.days ?? 7)), ["days"]),
+    requireIntegers((req, res) => {
+      if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
+      res.json(
+        getSummary(db, req.parsedParams.days ?? 7, {
+          includeSubagents: parseFlag(req.query.subagents, true).value,
+        }),
+      );
+    }, ["days"]),
   );
 
   app.get("/api/hourly", (req, res) => {
     const { day, cwd, provider } = req.query;
+    if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
     // The drill-down is always one day, and the day comes from a chart bar, so a
     // non-date here means a broken caller rather than a missing filter.
     if (!isIsoDate(day)) {
@@ -141,12 +175,14 @@ export const createApp = (db, dependencies) => {
         cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
         provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
         tzOffsetMinutes: offset ?? 0,
+        includeSubagents: parseFlag(req.query.subagents, true).value,
       }),
     );
   });
 
   app.get("/api/daily", (req, res) => {
     const { from, to, cwd, provider } = req.query;
+    if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
     if (from !== undefined && !isIsoDate(from)) {
       res.status(400).json({ error: "invalid_parameter", parameter: "from", received: from });
       return;
@@ -171,6 +207,7 @@ export const createApp = (db, dependencies) => {
         cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
         provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
         tzOffsetMinutes: offset ?? 0,
+        includeSubagents: parseFlag(req.query.subagents, true).value,
       }),
     );
   });
@@ -178,7 +215,8 @@ export const createApp = (db, dependencies) => {
   app.get(
     "/api/sessions",
     requireIntegers(
-      (req, res) =>
+      (req, res) => {
+        if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
         res.json(
           getSessions(db, {
             limit: req.parsedParams.limit,
@@ -186,8 +224,10 @@ export const createApp = (db, dependencies) => {
             cwd: typeof req.query.cwd === "string" ? req.query.cwd : undefined,
             provider: typeof req.query.provider === "string" ? req.query.provider : undefined,
             sort: req.query.sort === "cost" ? "cost" : "activity",
+            includeSubagents: parseFlag(req.query.subagents, true).value,
           }),
-        ),
+        );
+      },
       ["limit", "offset"],
     ),
   );
@@ -201,7 +241,10 @@ export const createApp = (db, dependencies) => {
     res.json(session);
   });
 
-  app.get("/api/models", (_req, res) => res.json(getModelCost(db)));
+  app.get("/api/models", (req, res) => {
+    if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
+    res.json(getModelCost(db, { includeSubagents: parseFlag(req.query.subagents, true).value }));
+  });
   app.get("/api/filters", (_req, res) => res.json(getFilters(db)));
 
   app.post("/api/rescan", requireToken, (_req, res) => {

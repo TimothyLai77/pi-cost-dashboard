@@ -29,12 +29,12 @@ export const upsertSession = (db, session, events, source) => {
     const result = db
       .prepare(`
         INSERT INTO sessions (
-          session_id, session_file, parent_session_id, cwd, name, started_at,
+          session_id, session_file, parent_session_id, parent_session_file, cwd, name, started_at,
           last_activity_at, entry_count, cost_micros, input_tokens, output_tokens,
           cache_read_tokens, cache_write_tokens, total_tokens, user_messages,
           assistant_messages, tool_calls, tool_results, total_messages, last_source
         ) VALUES (
-          @session_id, @session_file, @parent_session_id, @cwd, @name, @started_at,
+          @session_id, @session_file, @parent_session_id, @parent_session_file, @cwd, @name, @started_at,
           @last_activity_at, @entry_count, @cost_micros, @input_tokens, @output_tokens,
           @cache_read_tokens, @cache_write_tokens, @total_tokens, @user_messages,
           @assistant_messages, @tool_calls, @tool_results, @total_messages, @source
@@ -42,6 +42,7 @@ export const upsertSession = (db, session, events, source) => {
         ON CONFLICT (session_id) DO UPDATE SET
           session_file       = excluded.session_file,
           parent_session_id  = excluded.parent_session_id,
+          parent_session_file = excluded.parent_session_file,
           cwd                = excluded.cwd,
           name               = excluded.name,
           started_at         = excluded.started_at,
@@ -67,6 +68,7 @@ export const upsertSession = (db, session, events, source) => {
         session_id: session.sessionId,
         session_file: session.sessionFile,
         parent_session_id: session.parentSessionId,
+        parent_session_file: session.parentSessionFile ?? null,
         cwd: session.cwd ?? "",
         name: session.name,
         started_at: session.startedAt ?? session.lastActivityAt ?? "",
