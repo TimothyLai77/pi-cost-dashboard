@@ -18,5 +18,14 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Recharts is most of the bundle and is only needed by the chart panel. Splitting
+        // it keeps the app shell in a small chunk that revalidates quickly.
+        manualChunks: {
+          recharts: ["recharts"],
+        },
+      },
+    },
   },
 });

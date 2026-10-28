@@ -2,9 +2,8 @@
 
 Express server + SQLite + React dashboard that stores and charts Pi session cost.
 
-Phases 1–4 are built: aggregator, schema and backfill, read API, and the React app.
-`POST /api/ingest` is stubbed (501) until Phase 5. Full plan in
-[../DESIGN.md](../DESIGN.md).
+All eight phases are built: aggregator, schema and backfill, read API, React app, ingest
+endpoint, and the Pi extension. Full plan in [../DESIGN.md](../DESIGN.md).
 
 ## Run it
 
@@ -17,11 +16,19 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 50 tests
+npm test             # 77 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
 its API from one port. `npm run dev` is the editing workflow.
+
+To see a live session on the dashboard, install the extension
+([../pi-extension/README.md](../pi-extension/README.md)) and point it here:
+
+```bash
+ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
+export PI_COST_URL=http://127.0.0.1:4870/api/ingest
+```
 
 ## Layout
 
@@ -70,7 +77,7 @@ dashboard/
 | `GET` | `/api/filters` | project and provider values for the controls |
 | `GET` | `/api/health` | counts, schema version, last scan |
 | `POST` | `/api/rescan` | force a full rescan |
-| `POST` | `/api/ingest` | 501 until Phase 5 |
+| `POST` | `/api/ingest` | extension report: validated, provisional, idempotent |
 
 Money is integer micro-US dollars (`costMicros`) plus a formatted `costUsd` string.
 Reads are open; the two POST routes require `x-pi-cost-token` when `PI_COST_TOKEN` is
@@ -97,5 +104,16 @@ rollup against the sum of its own facts.
 - **The sessions tree contains non-session JSONL.** Pi writes subagent transcripts under
   `subagent-artifacts`; the walk skips those directories and the header check rejects
   the rest.
-- **The Recharts bundle is 619 kB** (186 kB gzipped). Worth code-splitting if the app
-  grows; not worth it at this size.
+- **The Recharts bundle is split from the app shell** — 221 kB app, 397 kB chart library
+  (116 kB gzipped), so the shell revalidates quickly.
+- **Provisional rows are marked, not trusted.** A push from the extension is a snapshot of
+  a running session, so `last_source = 'push'` marks the row and the API reports
+  `provisional: true`. The UI labels those rows live. The next scan, which runs every 60 s,
+  replaces them with file-derived numbers, and `upsertSession` refuses to let a push
+  overwrite scanned numbers.
+- **Ingest validation rejects unknown keys.** A future version of the extension cannot
+  quietly start sending transcript content, and a client that sends text gets a 400 naming
+  the field.
+- **Day buckets follow the viewer.** `tzOffsetMinutes` shifts the daily buckets; the app's
+  Local days toggle sends the browser's offset. Totals are identical either way — only the
+  day a session is billed to moves.

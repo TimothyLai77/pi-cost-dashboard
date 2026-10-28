@@ -92,6 +92,21 @@ body {
   flex: 1;
 }
 
+/* Title, subtitle, and the freshness line stack as one block so the controls on the right
+   stay aligned to the baseline row. */
+.masthead-copy {
+  display: grid;
+  gap: var(--space-2);
+}
+
+/* `.masthead p` is more specific than `.eyebrow`, so the label needs its own rule here. */
+.masthead .eyebrow {
+  font-family: var(--font-numeral);
+  font-size: 0.6875rem;
+  letter-spacing: 0.09em;
+  color: var(--ink-faint);
+}
+
 /* --- eyebrow labels --- */
 
 .eyebrow {
@@ -223,6 +238,12 @@ button.ghost {
   background: var(--paper);
   border: 1px solid var(--rule-strong);
   padding: var(--space-2) var(--space-3);
+}
+
+.controls input[type="checkbox"] {
+  accent-color: var(--live);
+  width: 0.9rem;
+  height: 0.9rem;
 }
 
 :where(button, select, a, input):focus-visible {

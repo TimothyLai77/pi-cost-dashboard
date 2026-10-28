@@ -5,7 +5,7 @@
  * bounds and the server returns the full recorded history.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useApi } from "./api.js";
 import { CostChart } from "./components/CostChart.jsx";
@@ -19,6 +19,9 @@ const RANGES = [
   { label: "1y", days: 365 },
   { label: "all", days: null },
 ];
+
+/** Seconds between automatic refreshes, so a running session's numbers move on their own. */
+const REFRESH_INTERVAL_MS = 30_000;
 
 /**
  * @param {{ title: string, children: React.ReactNode, actions?: React.ReactNode }} props
@@ -55,8 +58,12 @@ export const App = () => {
   const [provider, setProvider] = useState("");
   const [page, setPage] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
+  // UTC is how the data is stored. Bucketing by local day is a display choice, so it
+  // defaults off and is applied as an offset the server computes in SQL.
+  const [localDays, setLocalDays] = useState(false);
 
   const range = RANGES[rangeIndex];
+  const tzOffsetMinutes = localDays ? -new Date().getTimezoneOffset() : 0;
 
   const summary = useApi("/api/summary", { days: range.days ?? 7, _k: refreshKey });
   const filters = useApi("/api/filters", { _k: refreshKey });
@@ -74,6 +81,7 @@ export const App = () => {
     ...rangeParams,
     cwd: project,
     provider,
+    tzOffsetMinutes,
     _k: refreshKey,
   });
 
@@ -83,6 +91,20 @@ export const App = () => {
     cwd: project,
     _k: refreshKey,
   });
+
+  const health = useApi("/api/health", { _k: refreshKey });
+
+  const reloadAll = useCallback(() => {
+    setRefreshKey((key) => key + 1);
+  }, []);
+
+  // A running session pushes a provisional snapshot, and the server rescans every 60s.
+  // Refreshing on the same cadence means you do not have to press anything to watch a
+  // session's cost climb.
+  useEffect(() => {
+    const timer = setInterval(reloadAll, REFRESH_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [reloadAll]);
 
   const firstError = [summary, chart, models, sessions].find((request) => request.error);
   const loading = [summary, chart, models, sessions].some((request) => request.loading);
@@ -100,21 +122,25 @@ export const App = () => {
   return (
     <main className="page">
       <header className="masthead">
-        <h1>Pi session spend</h1>
-        <p>What the agents cost, by day, project, and model.</p>
+        <div className="masthead-copy">
+          <h1>Pi session spend</h1>
+          <p>What the agents cost, by day, project, and model.</p>
+          {loading && <p className="eyebrow">Updating…</p>}
+          {!loading && health.data?.lastScanAt && (
+            <p className="eyebrow">
+              {health.data.sessionCount} sessions · {health.data.usageEventCount} usage records ·
+              scanned {health.data.lastScanAt.replace("T", " ").replace("Z", " UTC")} ·
+              rows marked live came from the extension, not a scan
+            </p>
+          )}
+        </div>
         <span className="spacer" />
         <span className="controls">
-          <button
-            type="button"
-            className="ghost"
-            onClick={() => {
-              setRefreshKey((key) => key + 1);
-              summary.reload();
-              chart.reload();
-              models.reload();
-              sessions.reload();
-            }}
-          >
+          <label title="Bucket days by your browser's timezone instead of UTC">
+            <input type="checkbox" checked={localDays} onChange={(event) => setLocalDays(event.target.checked)} />
+            Local days
+          </label>
+          <button type="button" className="ghost" onClick={reloadAll}>
             Refresh
           </button>
         </span>
@@ -193,7 +219,16 @@ export const App = () => {
               {!models.loading && (models.data?.length ?? 0) > 0 && <ModelBreakdown models={models.data} />}
             </Panel>
 
-            <Panel title="Sessions" actions={<span className="eyebrow">newest activity first</span>}>
+            <Panel
+              title="Sessions"
+              actions={
+                <span className="eyebrow">
+                  {sessions.data
+                    ? `${sessions.data.total} shown of ${sessions.data.totalMatches} sessions · newest activity first`
+                    : "newest activity first"}
+                </span>
+              }
+            >
               {sessions.loading && <div className="state">Loading sessions…</div>}
               {!sessions.loading && (
                 <SessionTable
@@ -204,8 +239,6 @@ export const App = () => {
               )}
             </Panel>
           </div>
-
-          {loading && <p className="eyebrow">Updating…</p>}
         </>
       )}
     </main>
