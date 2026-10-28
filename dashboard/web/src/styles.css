@@ -648,18 +648,6 @@ button.ghost {
   font-size: 0.8125rem;
 }
 
-.grid-two {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--space-4);
-}
-
-@media (max-width: 60rem) {
-  .grid-two {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 @media (max-width: 40rem) {
   .page {
     padding: var(--space-4) var(--space-3) var(--space-5);

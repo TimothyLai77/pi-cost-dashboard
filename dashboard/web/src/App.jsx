@@ -356,35 +356,33 @@ export const App = () => {
             )}
           </Panel>
 
-          <div className="grid-two">
-            <Panel title="Spend by model">
-              {models.loading && <div className="state">Loading models…</div>}
-              {!models.loading && (models.data?.length ?? 0) === 0 && (
-                <div className="state">No usage recorded yet. Run the backfill to load past sessions.</div>
-              )}
-              {!models.loading && (models.data?.length ?? 0) > 0 && <ModelBreakdown models={models.data} />}
-            </Panel>
+          <Panel
+            title="Sessions"
+            actions={
+              <span className="eyebrow">
+                {sessions.data
+                  ? `${sessions.data.total} shown of ${sessions.data.totalMatches} sessions · newest activity first`
+                  : "newest activity first"}
+              </span>
+            }
+          >
+            {sessions.loading && <div className="state">Loading sessions…</div>}
+            {!sessions.loading && (
+              <SessionTable
+                result={sessions.data}
+                onPrev={() => setPage((current) => Math.max(0, current - 1))}
+                onNext={() => setPage((current) => current + 1)}
+              />
+            )}
+          </Panel>
 
-            <Panel
-              title="Sessions"
-              actions={
-                <span className="eyebrow">
-                  {sessions.data
-                    ? `${sessions.data.total} shown of ${sessions.data.totalMatches} sessions · newest activity first`
-                    : "newest activity first"}
-                </span>
-              }
-            >
-              {sessions.loading && <div className="state">Loading sessions…</div>}
-              {!sessions.loading && (
-                <SessionTable
-                  result={sessions.data}
-                  onPrev={() => setPage((current) => Math.max(0, current - 1))}
-                  onNext={() => setPage((current) => current + 1)}
-                />
-              )}
-            </Panel>
-          </div>
+          <Panel title="Spend by model">
+            {models.loading && <div className="state">Loading models…</div>}
+            {!models.loading && (models.data?.length ?? 0) === 0 && (
+              <div className="state">No usage recorded yet. Run the backfill to load past sessions.</div>
+            )}
+            {!models.loading && (models.data?.length ?? 0) > 0 && <ModelBreakdown models={models.data} />}
+          </Panel>
 
           <footer className="footer">
             <span>

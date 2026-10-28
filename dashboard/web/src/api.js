@@ -86,11 +86,17 @@ export const useApi = (path, params = {}) => {
 
 /**
  * Format an integer token count compactly, matching how the footer reports it.
+ *
+ * Cache reads make token totals large: a month of heavy agent use runs into hundreds of
+ * millions and all-time passes a billion, so the scale runs k → M → B. Without the billions
+ * branch a 1.2 billion-token total rendered as "1228M".
+ *
  * @param {number} tokens
- * @returns {string}
+ * @returns {string} e.g. "812", "1.5k", "466k", "117M", "1.2B"
  */
 export const formatTokens = (tokens) => {
   const value = Number(tokens) || 0;
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(value >= 10_000_000_000 ? 0 : 1)}B`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k`;
   return String(value);
