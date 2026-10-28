@@ -1,0 +1,443 @@
+/*
+  Ledger palette. Ink on cool paper, one warm accent reserved for money, one cool
+  accent reserved for live and focus. Everything else stays quiet so the numbers carry
+  the page.
+*/
+:root {
+  --paper: #f4f5f3;
+  --paper-raised: #fbfbf9;
+  --ink: #16191d;
+  --ink-soft: #4b545e;
+  --ink-faint: #7c858f;
+  --rule: #d9dcd6;
+  --rule-strong: #b9bdb6;
+  --money: #a6541f;
+  --money-soft: #e9d9c8;
+  --volume: #b3bec8;
+  --live: #0e6e8c;
+
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-numeral: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2.5rem;
+
+  --measure: 78rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every numeral is tabular so columns of figures line up without a table grid. */
+.numeral {
+  font-family: var(--font-numeral);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.page {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--space-5) var(--space-4) var(--space-6);
+}
+
+/* --- masthead --- */
+
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-4);
+  border-bottom: 2px solid var(--ink);
+  padding-bottom: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.masthead h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.masthead p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+
+.masthead .spacer {
+  flex: 1;
+}
+
+/* --- eyebrow labels --- */
+
+.eyebrow {
+  font-family: var(--font-numeral);
+  font-size: 0.6875rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* --- summary ledger strip --- */
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  margin-bottom: var(--space-5);
+}
+
+.summary-cell {
+  background: var(--paper-raised);
+  padding: var(--space-3) var(--space-4);
+}
+
+.summary-cell .value {
+  display: block;
+  font-family: var(--font-numeral);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.625rem;
+  font-weight: 500;
+  color: var(--money);
+  letter-spacing: -0.02em;
+}
+
+.summary-cell .sub {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}
+
+/* --- panels --- */
+
+.panel {
+  border: 1px solid var(--rule);
+  background: var(--paper-raised);
+  margin-bottom: var(--space-4);
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--rule);
+}
+
+.panel-head h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.panel-head .spacer {
+  flex: 1;
+}
+
+.panel-body {
+  padding: var(--space-4);
+}
+
+/* --- controls --- */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+}
+
+.range-set {
+  display: inline-flex;
+  border: 1px solid var(--rule-strong);
+}
+
+.range-set button {
+  appearance: none;
+  border: 0;
+  border-right: 1px solid var(--rule-strong);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  font-family: var(--font-numeral);
+  font-size: 0.75rem;
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.range-set button:last-child {
+  border-right: 0;
+}
+
+.range-set button:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.range-set button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper-raised);
+}
+
+select,
+button.ghost {
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  padding: var(--space-2) var(--space-3);
+}
+
+:where(button, select, a, input):focus-visible {
+  outline: 2px solid var(--live);
+  outline-offset: 2px;
+}
+
+/* --- chart --- */
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding: 0 var(--space-4) var(--space-3);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: var(--space-2);
+  vertical-align: -1px;
+}
+
+.swatch-money {
+  background: var(--money);
+}
+
+.swatch-volume {
+  background: var(--volume);
+}
+
+.chart-note {
+  padding: var(--space-3) var(--space-4) 0;
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+  max-width: 60ch;
+}
+
+/* --- model ledger --- */
+
+.ledger {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px dotted var(--rule-strong);
+}
+
+.ledger-row:last-child {
+  border-bottom: 0;
+}
+
+.ledger-row .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .amount {
+  color: var(--money);
+  text-align: right;
+}
+
+.ledger-row .meta {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  text-align: right;
+  min-width: 6.5rem;
+}
+
+.bar-track {
+  grid-column: 1 / -1;
+  height: 3px;
+  background: var(--rule);
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--money);
+}
+
+/* --- session table --- */
+
+.sessions {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.sessions th {
+  text-align: left;
+  font-family: var(--font-numeral);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-weight: 400;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.sessions td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: baseline;
+}
+
+.sessions td.numeric {
+  text-align: right;
+}
+
+.sessions td.cost {
+  color: var(--money);
+  text-align: right;
+}
+
+.sessions tr:hover td {
+  background: var(--paper);
+}
+
+.session-name {
+  color: var(--ink);
+}
+
+.session-project {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}
+
+.live-tag {
+  font-family: var(--font-numeral);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--live);
+  border: 1px solid var(--live);
+  padding: 0 var(--space-1);
+  margin-left: var(--space-2);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  font-size: 0.8125rem;
+  color: var(--ink-soft);
+}
+
+/* --- states --- */
+
+.state {
+  padding: var(--space-5) var(--space-4);
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+
+.state-error {
+  border: 1px solid var(--money);
+  background: var(--money-soft);
+  color: var(--ink);
+}
+
+.state-error h3 {
+  font-family: var(--font-display);
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+}
+
+.state-error code {
+  font-family: var(--font-numeral);
+  font-size: 0.8125rem;
+}
+
+.grid-two {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-4);
+}
+
+@media (max-width: 60rem) {
+  .grid-two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 40rem) {
+  .page {
+    padding: var(--space-4) var(--space-3) var(--space-5);
+  }
+
+  .summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sessions th.hide-narrow,
+  .sessions td.hide-narrow {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001s !important;
+    transition-duration: 0.001s !important;
+  }
+}

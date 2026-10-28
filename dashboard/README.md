@@ -2,30 +2,55 @@
 
 Express server + SQLite + React dashboard that stores and charts Pi session cost.
 
-**Status: design only, no code.** See [../DESIGN.md](../DESIGN.md) §4–§8, §10–§11.
+Phases 1–4 are built: aggregator, schema and backfill, read API, and the React app.
+`POST /api/ingest` is stubbed (501) until Phase 5. Full plan in
+[../DESIGN.md](../DESIGN.md).
 
-## Planned layout
+## Run it
+
+```bash
+cd dashboard
+npm install
+npm run migrate      # create data/cost.db
+npm run backfill     # scan every session file, prints totals
+npm run verify       # check the database against the files, exits non-zero on mismatch
+npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
+npm run build        # bundle web/ into web/dist
+npm start            # serve API and built app from 4870
+npm test             # 50 tests
+```
+
+Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
+its API from one port. `npm run dev` is the editing workflow.
+
+## Layout
 
 ```
 dashboard/
 ├── package.json
 ├── .env.example
+├── vite.config.js
 ├── server/
-│   ├── index.js            # express bootstrap, serves web/dist in prod
+│   ├── index.js            # express app; createApp() is exported for tests
 │   ├── db.js               # better-sqlite3 handle + migration runner
-│   ├── migrations/001_init.sql     # UP + DOWN, reversible
-│   ├── ingest.js           # POST /api/ingest: validate + guarded upsert
-│   ├── queries.js          # summary, daily, sessions, models
-│   └── scanner/
-│       ├── aggregate.js    # one session file -> { session, events }   (pure)
-│       └── scan.js         # directory walk, scan_state mtime/size cache
+│   ├── upsert.js           # guarded session upsert, shared by scan and ingest
+│   ├── queries.js          # summary, daily, sessions, models, filters, health
+│   ├── migrations/         # numbered .sql with .down.sql partners
+│   ├── scanner/
+│   │   ├── aggregate.js    # one session file -> { session, events }   (pure)
+│   │   └── scan.js         # directory walk + (mtime, size) cache
+│   ├── cli-aggregate.js    # cost rollup for one file
+│   ├── cli-migrate.js      # migrate / --down / --status
+│   ├── cli-backfill.js     # scan the directory, print totals
+│   ├── cli-verify.js       # database vs files, non-zero exit on mismatch
+│   └── test/               # node:test suites + fixtures
 └── web/
-    ├── vite.config.js      # dev proxy /api -> :4870
     ├── index.html
     └── src/
         ├── main.jsx
         ├── App.jsx
         ├── api.js
+        ├── styles.css
         └── components/
             ├── SummaryCards.jsx
             ├── CostChart.jsx
@@ -35,50 +60,42 @@ dashboard/
 
 ## API
 
-| Method | Path | Purpose |
+| Method | Path | Status |
 |---|---|---|
-| `POST` | `/api/ingest` | Upsert a session snapshot from the extension |
-| `GET` | `/api/summary` | All-time plus today / 7d / 30d totals |
-| `GET` | `/api/daily` | Time-series points, filtered by project / provider |
-| `GET` | `/api/sessions` | Paginated session table, newest first |
-| `GET` | `/api/sessions/:id` | One session, totals and per-entry events |
-| `GET` | `/api/models` | Spend by provider and model |
-| `POST` | `/api/rescan` | Run an incremental directory scan now |
-| `GET` | `/api/health` | DB path, session count, last scan, schema version |
+| `GET` | `/api/summary?days=7` | today / 7d / 30d / all-time totals |
+| `GET` | `/api/daily?from&to&cwd&provider&tzOffsetMinutes` | chart points, gap-filled |
+| `GET` | `/api/sessions?limit&offset&cwd&provider&sort` | session list |
+| `GET` | `/api/sessions/:id` | one session with its usage facts |
+| `GET` | `/api/models` | spend by provider and model |
+| `GET` | `/api/filters` | project and provider values for the controls |
+| `GET` | `/api/health` | counts, schema version, last scan |
+| `POST` | `/api/rescan` | force a full rescan |
+| `POST` | `/api/ingest` | 501 until Phase 5 |
 
-## Data model, three tables
+Money is integer micro-US dollars (`costMicros`) plus a formatted `costUsd` string.
+Reads are open; the two POST routes require `x-pi-cost-token` when `PI_COST_TOKEN` is
+set. The server binds `127.0.0.1`.
+
+## Data model
 
 | Table | Granularity | Why |
 |---|---|---|
-| `sessions` | one row per Pi session | totals, project, name, counts |
-| `usage_events` | one row per usage-bearing entry | correct daily attribution for sessions that run across midnight |
-| `scan_state` | one row per session file | `(mtime, size)` cache so warm scans skip unchanged files |
+| `sessions` | one row per Pi session | rollups, project, name, counts |
+| `usage_events` | one row per usage-bearing entry | a session spanning midnight bills the days it ran on |
+| `scan_state` | one row per session file | `(mtime, size)` cache; unchanged files are skipped |
 
-`daily_cost` and `model_cost` are views over `usage_events`, so rollups cannot
-drift out of sync with the facts.
+`daily_cost` and `model_cost` are views over `usage_events`, so rollups cannot drift out
+of sync with the facts. `npm run verify` checks row counts, grand total, and each
+rollup against the sum of its own facts.
 
-Money is stored as **integer micro-US dollars** (`cost_micros`), never a float.
-SQLite has no DECIMAL; integers keep sums exact. Formatted to dollars in the API.
+## Notes from building this
 
-## Scan vs push
-
-Both paths write the same row. The file is the source of truth; a push is a
-snapshot of a running session. An `entry_count` monotonic guard discards stale
-updates, and `last_source = 'push'` marks rows as provisional in the UI until the
-next scan rewrites them from disk.
-
-## Planned commands
-
-| Command | Does |
-|---|---|
-| `npm run dev` | Express on 4870 + vite on 5173 |
-| `npm run backfill` | Full scan of all session files, idempotent |
-| `npm run verify` | Row count and grand total against an independent scanner |
-| `npm run migrate` | Apply pending migrations |
-| `npm run build` | Vite build, then Express serves the app on one port |
-
-## Needs approval before install
-
-`express`, `better-sqlite3` (native module, needs a compiler), `cors`, `dotenv`,
-`react`, `react-dom`, `vite`, `recharts`, `concurrently`. See DESIGN.md §11.
-Nothing is installed until approved.
+- **Warm scans are fast.** 21 ms for 265 sessions with the cache; 738 ms cold.
+- **Zero-cost days are real.** Most usage here is local models with no catalog price, so
+  the chart draws token volume as a background band under the cost bars rather than
+  leaving a flat zero line that reads as missing data.
+- **The sessions tree contains non-session JSONL.** Pi writes subagent transcripts under
+  `subagent-artifacts`; the walk skips those directories and the header check rejects
+  the rest.
+- **The Recharts bundle is 619 kB** (186 kB gzipped). Worth code-splitting if the app
+  grows; not worth it at this size.
