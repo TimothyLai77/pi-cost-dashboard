@@ -320,6 +320,19 @@ buckets are UTC days. `/api/daily` accepts a `tzOffset` query param and shifts
 in SQL for a local-day chart; the default is UTC so stored data stays
 unambiguous.
 
+### Model attribution
+
+Assistant messages and `usage` entries name the model they were billed against.
+Compaction, branch-summary, and tool-result usage name none. Rather than leaving that
+spend in a null bucket, the aggregator tracks the model in effect while reading the
+file: Pi writes a `model_change` entry on every switch, and each assistant message
+names the model that answered. That pair is the fallback for entries that name no
+model, which is the model that was configured when the cost was incurred.
+
+On this machine's history that removes all unattributed spend (0 rows, 0 micro-dollars
+in the by-model view). A per-model breakdown with a `null` bucket is not actionable,
+so this is worth the extra state in the scanner.
+
 ### Relationship summary
 
 ```
@@ -551,6 +564,11 @@ const scanSessions = (sessionsDir, db) => { ... };
 
 Behavior notes:
 
+- **Non-session JSONL exists in the sessions tree.** Pi writes subagent transcripts into
+  a `subagent-artifacts` folder inside a project's session directory. The walk skips
+  directories in `NON_SESSION_DIRECTORIES`, and the aggregator's header check is the
+  second gate: a file whose first entry is not `type: "session"` is rejected and counted,
+  never stored. On this machine that is 1 file out of 266.
 - Malformed lines are skipped, not fatal. Pi writes complete JSON per line, so
   a bad line means a truncated tail from a crash. Skip and count it, and expose
   it in `/api/health` as `skippedLines`.
@@ -858,9 +876,13 @@ version cannot quietly start shipping transcript data into the database.
 - `cost.db` is a single file, excluded from git, backed up by copying it.
 - `npm run backfill` — full scan, prints a table, safe to re-run (idempotent by
   `scan_state`).
-- `npm run verify` — compares `SELECT COUNT(*) FROM sessions` against a plain
-  `find ... | wc -l` and prints the diff, plus a grand-total cost comparison
-  against the independent scanner in the appendix. Catches scanner bugs early.
+- `npm run verify` — rescans from the current file state, then checks three things:
+  session row count against the number of session files, grand-total cost against the
+  sum freshly computed from the files, and each stored rollup against the sum of its own
+  stored facts. Exits non-zero on any mismatch. Rescanning first matters: a running Pi
+  session is appended to continuously, so comparing an older scan against a newer file
+  read reports growth as if it were a scanner bug. Sessions with no usage facts are
+  treated as zero, not as missing rows.
 - If a session file is deleted after being ingested, the row is removed on the
   next scan (§7). Retention is therefore "as long as the files exist," which
   keeps the dashboard and Pi's own session list consistent.

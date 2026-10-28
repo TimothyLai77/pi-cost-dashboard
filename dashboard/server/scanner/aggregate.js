@@ -58,22 +58,25 @@ const usageFromEntry = (entry) => {
 /**
  * Build one usage fact row from an entry that carries usage.
  *
- * Provider and model come from the entry itself: assistant messages name the model that
- * answered, and `usage` entries name the model they were attributed to.
+ * Provider and model come from the entry when it names them: assistant messages name the
+ * model that answered, and `usage` entries name the model they were attributed to.
+ * Compaction, branch-summary, and tool-result usage name no model at all, so the caller
+ * passes the model in effect at that point in the session, which is the model Pi paid for.
  *
  * @param {any} entry A parsed session entry
  * @param {string} entryKind One of assistant, tool_result, usage, compaction, branch_summary
  * @param {any} usage The entry's usage block
+ * @param {{ provider: string | null, modelId: string | null }} activeModel Model in effect at this entry
  * @returns {object} A usage_events-shaped record
  */
-const buildEvent = (entry, entryKind, usage) => {
+const buildEvent = (entry, entryKind, usage, activeModel) => {
   const message = entry.message ?? {};
   return {
     entryId: entry.id,
     kind: entryKind,
     occurredAt: entry.timestamp,
-    provider: message.provider ?? entry.provider ?? null,
-    modelId: message.model ?? entry.model ?? null,
+    provider: message.provider ?? entry.provider ?? activeModel.provider,
+    modelId: message.model ?? entry.model ?? activeModel.modelId,
     inputTokens: usage.input ?? 0,
     outputTokens: usage.output ?? 0,
     cacheReadTokens: usage.cacheRead ?? 0,
@@ -141,6 +144,11 @@ export const aggregateSession = (filePath, fileContents) => {
   const missingUsageCount = {};
   let skippedLines = 0;
 
+  // Provider and model in effect as the file is read. Pi records a model_change entry on
+  // every switch and names the answering model on each assistant message, so this tracks
+  // which model was billed at any point in the session.
+  const activeModel = { provider: null, modelId: null };
+
   for (const line of lines) {
     let entry;
     try {
@@ -169,6 +177,11 @@ export const aggregateSession = (filePath, fileContents) => {
       session.lastActivityAt = entry.timestamp;
     }
 
+    if (entry.type === "model_change") {
+      activeModel.provider = entry.provider ?? activeModel.provider;
+      activeModel.modelId = entry.modelId ?? activeModel.modelId;
+    }
+
     if (entry.type === "session_info" && typeof entry.name === "string" && entry.name.length > 0) {
       session.name = entry.name;
     }
@@ -180,6 +193,10 @@ export const aggregateSession = (filePath, fileContents) => {
       if (role === "toolResult") session.toolResults += 1;
       if (role === "assistant") {
         session.assistantMessages += 1;
+        // An assistant message names the model that answered it, which is the model in
+        // effect from here until the next model_change.
+        activeModel.provider = entry.message?.provider ?? activeModel.provider;
+        activeModel.modelId = entry.message?.model ?? activeModel.modelId;
         const content = entry.message?.content;
         if (Array.isArray(content)) {
           session.toolCalls += content.filter((block) => block?.type === "toolCall").length;
@@ -202,7 +219,7 @@ export const aggregateSession = (filePath, fileContents) => {
       continue;
     }
 
-    const event = buildEvent(entry, found.entryKind, found.usage);
+    const event = buildEvent(entry, found.entryKind, found.usage, activeModel);
     events.push(event);
 
     session.costMicros += event.costMicros;
