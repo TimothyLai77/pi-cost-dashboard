@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TimothyLai77/pi-cost-dashboard/pi-cost-ingest-v1",
+  "title": "Pi cost session snapshot",
+  "description": "Payload the Pi extension POSTs to /api/ingest. Numbers and identifiers only: no prompt text, no assistant text, no tool input or output, no file contents, no credentials. The server rejects unknown keys, so a future extension version cannot quietly start shipping transcript data into the database.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sessionId",
+    "sessionFile",
+    "cwd",
+    "startedAt",
+    "lastActivityAt",
+    "entryCount",
+    "totals",
+    "events",
+    "reportedBy"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "Contract version. The server rejects anything it does not understand."
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$",
+      "description": "Pi session UUID from the session header."
+    },
+    "sessionFile": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Absolute path to the session JSONL file."
+    },
+    "cwd": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project directory from the session header."
+    },
+    "name": {
+      "type": ["string", "null"],
+      "maxLength": 200,
+      "description": "Session display name set with /name. Capped, and optional."
+    },
+    "parentSessionId": {
+      "type": ["string", "null"],
+      "description": "Set for a session created by /fork or /clone."
+    },
+    "startedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "description": "Header timestamp, ISO-8601 UTC."
+    },
+    "lastActivityAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "description": "Newest entry timestamp."
+    },
+    "entryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Session entries excluding the header. Monotonic guard: an update only applies when this is not lower than what the server stored."
+    },
+    "totals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "costMicros",
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "cacheWriteTokens",
+        "totalTokens"
+      ],
+      "properties": {
+        "costMicros": { "type": "integer", "minimum": 0, "description": "US dollars times 1e6, rounded once per entry." },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "cacheReadTokens": { "type": "integer", "minimum": 0 },
+        "cacheWriteTokens": { "type": "integer", "minimum": 0 },
+        "totalTokens": { "type": "integer", "minimum": 0 },
+        "userMessages": { "type": "integer", "minimum": 0 },
+        "assistantMessages": { "type": "integer", "minimum": 0 },
+        "toolCalls": { "type": "integer", "minimum": 0 },
+        "toolResults": { "type": "integer", "minimum": 0 },
+        "totalMessages": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "events": {
+      "type": "array",
+      "description": "Complete set of usage facts for the session, not a delta. The server replaces the stored set inside one transaction, so ingest is idempotent and arrival order does not matter.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entryId", "kind", "occurredAt", "costMicros"],
+        "properties": {
+          "entryId": { "type": "string", "minLength": 1, "description": "Session entry id, stable across reports." },
+          "kind": { "enum": ["assistant", "tool_result", "usage", "compaction", "branch_summary"] },
+          "occurredAt": {
+            "type": "string",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$"
+          },
+          "provider": { "type": ["string", "null"], "description": "From the entry when it names one; otherwise the model in effect at that point in the session." },
+          "modelId": { "type": ["string", "null"] },
+          "inputTokens": { "type": "integer", "minimum": 0 },
+          "outputTokens": { "type": "integer", "minimum": 0 },
+          "cacheReadTokens": { "type": "integer", "minimum": 0 },
+          "cacheWriteTokens": { "type": "integer", "minimum": 0 },
+          "totalTokens": { "type": "integer", "minimum": 0 },
+          "costMicros": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "reportedBy": {
+      "enum": ["command", "agent_settled", "shutdown"],
+      "description": "Which Pi event sent this snapshot."
+    },
+    "reportedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
+      "description": "When the extension built the snapshot."
+    }
+  }
+}

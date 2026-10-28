@@ -296,7 +296,7 @@ test("writes require a token only when one is configured", async () => {
   }
 });
 
-test("GET /api/ingest reports unimplemented until Phase 5", async () => {
+test("POST /api/ingest with an empty object reports the contract version it needs", async () => {
   const db = seededDb();
   await withServer(db, async (base) => {
     const response = await fetch(`${base}/api/ingest`, {
@@ -304,8 +304,10 @@ test("GET /api/ingest reports unimplemented until Phase 5", async () => {
       headers: { "content-type": "application/json" },
       body: "{}",
     });
-    assert.equal(response.status, 501);
-    assert.equal((await response.json()).error, "not_implemented");
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error, "unsupported_schema_version");
+    assert.equal(body.supported, 1);
   });
   db.close();
 });

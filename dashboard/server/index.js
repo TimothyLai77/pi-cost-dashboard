@@ -17,6 +17,7 @@ import express from "express";
 import cors from "cors";
 
 import { migrateUp, openDatabase } from "./db.js";
+import { ingestSession } from "./ingest.js";
 import {
   getDailyCost,
   getFilters,
@@ -174,9 +175,11 @@ export const createApp = (db, dependencies) => {
     res.json(dependencies.rescan());
   });
 
-  // POST /api/ingest is added in Phase 5.
-  app.post("/api/ingest", requireToken, (_req, res) => {
-    res.status(501).json({ error: "not_implemented", detail: "ingest lands in Phase 5" });
+  // Session snapshots from the Pi extension. Validation is strict and rejects unknown
+  // keys, so a future extension cannot start sending transcript content by accident.
+  app.post("/api/ingest", requireToken, (req, res) => {
+    const { status, body } = ingestSession(db, req.body);
+    res.status(status).json(body);
   });
 
   const webDist = join(here, "..", "web", "dist");
