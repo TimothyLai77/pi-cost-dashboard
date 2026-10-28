@@ -45,7 +45,7 @@ const Panel = ({ title, actions, children }) => (
       <span className="spacer" />
       {actions}
     </div>
-    {children}
+    <div className="panel-body">{children}</div>
   </section>
 );
 
@@ -110,6 +110,13 @@ export const App = () => {
     setRefreshKey((key) => key + 1);
   }, []);
 
+  // Wall clock of the newest successful summary fetch, shown in the footer so a refresh is
+  // something you can read rather than a page that visibly jumps.
+  const [updatedAt, setUpdatedAt] = useState(null);
+  useEffect(() => {
+    if (summary.data) setUpdatedAt(new Date());
+  }, [summary.data]);
+
   // A running session pushes a provisional snapshot, and the server rescans every 60s.
   // Refreshing on the same cadence means you do not have to press anything to watch a
   // session's cost climb.
@@ -118,7 +125,15 @@ export const App = () => {
     return () => clearInterval(timer);
   }, [reloadAll]);
 
-  const firstError = [summary, chart, models, sessions].find((request) => request.error);
+  // An error with data behind it is a failed refresh, not a broken page: keep the numbers,
+  // say the update failed, and let the next tick try again.
+  const staleError = [summary, chart, models, sessions, filters].find(
+    (request) => request.error && request.data,
+  );
+  const firstError = [summary, chart, models, sessions].find(
+    (request) => request.error && !request.data,
+  );
+  const refreshing = [summary, chart, models, sessions, filters].some((request) => request.refreshing);
   const loading = [summary, chart, models, sessions].some((request) => request.loading);
 
   const changeRange = (index) => {
@@ -137,8 +152,9 @@ export const App = () => {
         <div className="masthead-copy">
           <h1>Pi session spend</h1>
           <p>What the agents cost, by day, project, and model.</p>
-          {loading && <p className="eyebrow">Updating…</p>}
-          {!loading && health.data && (
+          {loading && <p className="eyebrow">Loading…</p>}
+          {!loading && refreshing && <p className="eyebrow updating">Updating…</p>}
+          {!loading && !refreshing && health.data && (
             <p className="eyebrow">
               {health.data.sessionCount} sessions · {health.data.usageEventCount} usage records
               {health.data.lastScanAt
@@ -173,6 +189,13 @@ export const App = () => {
           </button>
         </span>
       </header>
+
+      {staleError && (
+        <p className="eyebrow update-failed" role="status">
+          Last update failed · showing data from {updatedAt ? updatedAt.toLocaleTimeString() : "earlier"} ·{" "}
+          {staleError.error}
+        </p>
+      )}
 
       {firstError && (
         <ErrorState
@@ -267,6 +290,19 @@ export const App = () => {
               )}
             </Panel>
           </div>
+
+          <footer className="footer">
+            <span>
+              {updatedAt
+                ? `Updated ${updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+                : "Not updated yet"}{" · "}
+              refreshes every {Math.round(REFRESH_INTERVAL_MS / 1000)}s
+            </span>
+            <span>
+              Running sessions self-report; the rest is read from session files. A row marked{" "}
+              <span className="live-tag">live</span> is a session still writing its file.
+            </span>
+          </footer>
         </>
       )}
     </main>

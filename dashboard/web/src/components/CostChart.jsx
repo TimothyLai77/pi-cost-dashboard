@@ -67,7 +67,7 @@ export const CostChart = ({ points, range }) => {
         </span>
       </div>
 
-      <div style={{ height: "20rem", padding: "0 var(--space-2)" }}>
+      <div style={{ height: "20rem" }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={points} margin={{ top: 12, right: 8, bottom: 4, left: 8 }}>
             <CartesianGrid stroke="var(--rule)" strokeDasharray="0" vertical={false} />

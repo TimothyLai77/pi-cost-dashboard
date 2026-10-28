@@ -5,7 +5,7 @@
  * Express serves the built app from the same origin.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * GET a JSON path, throwing a readable error when the server reports one.
@@ -34,28 +34,40 @@ export const getJson = async (path, params = {}) => {
 /**
  * Fetch an endpoint and keep its result in state.
  *
- * Returns a null data value while loading, so callers render an explicit loading state
- * instead of an empty chart. Pass a null path to skip fetching.
+ * Stale-while-revalidate: a refetch keeps the previous result on screen and reports
+ * `refreshing` rather than clearing `data`. Auto-refresh runs every 30s, and clearing the
+ * data made the chart, model list, and table swap out for one-line loading messages and
+ * swap back when the response landed — the whole page collapsed and re-expanded twice a
+ * minute. `loading` is now true only when there is nothing to show yet, so a loading state
+ * means first paint, not a refresh.
+ *
+ * A failed refresh keeps the last good data and reports the error the same way, so a
+ * transient network blip does not blank a working page.
  *
  * @param {string | null} path Relative API path, or null to fetch nothing
  * @param {object} [params] Query parameters; changes re-run the request
- * @returns {{ data: any | null, loading: boolean, error: string | null, reload: () => void }}
+ * @returns {{ data: any | null, loading: boolean, refreshing: boolean, error: string | null, reload: () => void }}
  */
 export const useApi = (path, params = {}) => {
   const key = JSON.stringify(params);
-  const [state, setState] = useState({ data: null, loading: Boolean(path), error: null });
+  const [state, setState] = useState({ data: null, fetching: Boolean(path), error: null });
+  // Responses can arrive out of order. Only the newest request may write to state.
+  const requestId = useRef(0);
 
   const load = useCallback(async () => {
+    const id = ++requestId.current;
     if (!path) {
-      setState({ data: null, loading: false, error: null });
+      setState({ data: null, fetching: false, error: null });
       return;
     }
-    setState((current) => ({ ...current, loading: true, error: null }));
+    setState((current) => ({ ...current, fetching: true }));
     try {
       const data = await getJson(path, JSON.parse(key));
-      setState({ data, loading: false, error: null });
+      if (id !== requestId.current) return;
+      setState({ data, fetching: false, error: null });
     } catch (error) {
-      setState({ data: null, loading: false, error: error.message });
+      if (id !== requestId.current) return;
+      setState((current) => ({ ...current, fetching: false, error: error.message }));
     }
   }, [path, key]);
 
@@ -63,7 +75,13 @@ export const useApi = (path, params = {}) => {
     load();
   }, [load]);
 
-  return { ...state, reload: load };
+  return {
+    data: state.data,
+    loading: state.fetching && state.data === null,
+    refreshing: state.fetching && state.data !== null,
+    error: state.error,
+    reload: load,
+  };
 };
 
 /**

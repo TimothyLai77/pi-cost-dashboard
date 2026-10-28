@@ -238,6 +238,28 @@ body {
   padding: var(--space-4);
 }
 
+/* A table looks right running panel edge to panel edge: its rules span the full width and
+   the column headings line up with the panel title's own 16px inset. The 12px top inset
+   keeps the column headings off the panel head's rule. */
+.panel-body:has(> .sessions) {
+  padding: var(--space-3) 0;
+}
+
+.sessions th:first-child,
+.sessions td:first-child {
+  padding-left: var(--space-4);
+}
+
+.sessions th:last-child,
+.sessions td:last-child {
+  padding-right: var(--space-4);
+}
+
+/* Panels carry their own padding now, so state messages should not add a second layer. */
+.panel-body .state {
+  padding: var(--space-4) 0;
+}
+
 /* --- controls --- */
 
 .controls {
@@ -318,7 +340,7 @@ button.ghost {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-4);
-  padding: 0 var(--space-4) var(--space-3);
+  padding: 0 0 var(--space-3);
   font-size: 0.75rem;
   color: var(--ink-soft);
 }
@@ -340,7 +362,7 @@ button.ghost {
 }
 
 .chart-note {
-  padding: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2) 0 0;
   font-size: 0.8125rem;
   color: var(--ink-soft);
   max-width: 60ch;
@@ -460,9 +482,39 @@ button.ghost {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-3);
   font-size: 0.8125rem;
   color: var(--ink-soft);
+}
+
+/* --- page footer and refresh notices --- */
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--rule);
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.footer .live-tag {
+  margin: 0 var(--space-1);
+}
+
+/* A refresh is shown as a word, not a layout change. */
+.masthead .eyebrow.updating,
+.masthead .eyebrow.update-failed {
+  color: var(--ink-soft);
+}
+
+.update-failed {
+  display: block;
+  margin: 0 0 var(--space-4);
+  color: var(--warn);
 }
 
 /* --- states --- */
