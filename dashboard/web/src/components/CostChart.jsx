@@ -44,10 +44,10 @@ const DayTooltip = ({ active, payload }) => {
 };
 
 /**
- * @param {{ points: { day: string, costMicros: number, totalTokens: number, sessions: number }[], range: object }} props
+ * @param {{ points: { day: string, costMicros: number, totalTokens: number, sessions: number }[], range: object, onSelectDay?: (day: string) => void }} props
  * @returns {JSX.Element}
  */
-export const CostChart = ({ points, range }) => {
+export const CostChart = ({ points, range, onSelectDay }) => {
   const busiestDay = points.reduce((max, point) => Math.max(max, point.totalTokens), 0);
   const zeroCostDays = points.filter((point) => point.costMicros === 0 && point.totalTokens > 0).length;
 
@@ -65,6 +65,7 @@ export const CostChart = ({ points, range }) => {
         <span className="numeral">
           {range?.from ?? "—"} → {range?.to ?? "—"}
         </span>
+        {onSelectDay && <span className="legend-hint">click a bar for its hours</span>}
       </div>
 
       <div style={{ height: "20rem" }}>
@@ -107,6 +108,16 @@ export const CostChart = ({ points, range }) => {
               fill={MONEY}
               maxBarSize={14}
               isAnimationActive={false}
+              className={onSelectDay ? "bar-clickable" : undefined}
+              onClick={
+                onSelectDay
+                  ? (entry) => {
+                      // Recharts hands back the datum it drew, which carries the day label.
+                      const day = entry?.payload?.day ?? entry?.day;
+                      if (day) onSelectDay(day);
+                    }
+                  : undefined
+              }
             />
           </ComposedChart>
         </ResponsiveContainer>

@@ -18,6 +18,7 @@ import { upsertSession } from "../upsert.js";
 import { aggregateSession } from "../scanner/aggregate.js";
 import {
   getDailyCost,
+  getHourlyCost,
   getFilters,
   getHealth,
   getModelCost,
@@ -237,6 +238,83 @@ test("GET /api/health responds with the database state", async () => {
     const body = await response.json();
     assert.equal(body.sessionCount, 2);
     assert.equal(body.sessionsDir, "/tmp/sessions");
+  });
+  db.close();
+});
+
+test("getHourlyCost bills a day's spend to the hour it happened in", () => {
+  const db = seededDb();
+  const hourly = getHourlyCost(db, { day: "2026-01-01" });
+
+  // The whole day is returned, so an empty hour is a visible zero and not a gap.
+  assert.equal(hourly.points.length, 24);
+  assert.equal(hourly.points[0].hour, "2026-01-01 00:00");
+  assert.equal(hourly.points[23].hour, "2026-01-01 23:00");
+
+  const billed = hourly.points.filter((point) => point.costMicros > 0);
+  assert.equal(billed.length, 1);
+  // full-usage bills at 10:00:05Z.
+  assert.equal(billed[0].label, "10:00");
+  assert.equal(billed[0].costMicros, 19150);
+  assert.equal(billed[0].sessions, 1);
+
+  // The hours must add up to the same figure the daily chart shows for that day.
+  const daily = getDailyCost(db, { from: "2026-01-01", to: "2026-01-01" });
+  assert.equal(
+    hourly.totalCostMicros,
+    daily.points.reduce((sum, point) => sum + point.costMicros, 0),
+  );
+  db.close();
+});
+
+test("getHourlyCost moves buckets with the timezone offset, matching the day labels", () => {
+  const db = seededDb();
+  const utc = getHourlyCost(db, { day: "2026-01-01" }).points.find((p) => p.costMicros > 0);
+  const shifted = getHourlyCost(db, { day: "2026-01-01", tzOffsetMinutes: 120 }).points.find(
+    (p) => p.costMicros > 0,
+  );
+
+  assert.equal(utc.label, "10:00");
+  assert.equal(shifted.label, "12:00");
+  assert.equal(shifted.costMicros, utc.costMicros);
+  db.close();
+});
+
+test("getHourlyCost honours the project and provider filters", () => {
+  const db = seededDb();
+  const day = "2026-01-01";
+  const project = getHourlyCost(db, { day, cwd: "/no/such/project" });
+  assert.equal(project.totalCostMicros, 0);
+  assert.equal(project.points.length, 24);
+
+  const provider = getHourlyCost(db, { day, provider: "anthropic" });
+  assert.equal(provider.totalCostMicros, 19150);
+
+  const missing = getHourlyCost(db, { day, provider: "not-a-provider" });
+  assert.equal(missing.totalCostMicros, 0);
+  db.close();
+});
+
+test("GET /api/hourly returns a full day of hours and rejects a bad day", async () => {
+  const db = seededDb();
+  await withServer(db, async (base) => {
+    const ok = await fetch(`${base}/api/hourly?day=2026-01-01`);
+    assert.equal(ok.status, 200);
+    const body = await ok.json();
+    assert.equal(body.points.length, 24);
+    assert.equal(body.day, "2026-01-01");
+
+    const noDay = await fetch(`${base}/api/hourly`);
+    assert.equal(noDay.status, 400);
+    assert.equal((await noDay.json()).parameter, "day");
+
+    const badDay = await fetch(`${base}/api/hourly?day=01-01-2026`);
+    assert.equal(badDay.status, 400);
+    assert.equal((await badDay.json()).parameter, "day");
+
+    const badOffset = await fetch(`${base}/api/hourly?day=2026-01-01&tzOffsetMinutes=x`);
+    assert.equal(badOffset.status, 400);
+    assert.equal((await badOffset.json()).parameter, "tzOffsetMinutes");
   });
   db.close();
 });

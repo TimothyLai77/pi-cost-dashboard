@@ -139,6 +139,7 @@ dashboard/
 |---|---|---|
 | `GET` | `/api/summary?days=7` | today / 7d / 30d / all-time totals |
 | `GET` | `/api/daily?from&to&cwd&provider&tzOffsetMinutes` | chart points, gap-filled |
+| `GET` | `/api/hourly?day&cwd&provider&tzOffsetMinutes` | one day's 24 hours, zero-filled |
 | `GET` | `/api/sessions?limit&offset&cwd&provider&sort` | session list |
 | `GET` | `/api/sessions/:id` | one session with its usage facts |
 | `GET` | `/api/models` | spend by provider and model |

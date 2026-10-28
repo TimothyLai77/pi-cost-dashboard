@@ -20,7 +20,7 @@ Pi writes cost into every session file (`~/.pi/agent/sessions/**/*.jsonl`),
 computed from model catalog prices. The dashboard server scans those files into
 SQLite, which backfills all history. The extension pushes the session currently
 running in Pi so the dashboard updates live. A React app charts daily spend with
-project and model filters.
+project and model filters, and clicking a day opens that day's 24 hours.
 
 ## Quick start
 

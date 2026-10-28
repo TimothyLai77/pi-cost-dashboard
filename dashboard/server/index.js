@@ -25,6 +25,7 @@ import { migrateUp, openDatabase } from "./db.js";
 import { ingestSession } from "./ingest.js";
 import {
   getDailyCost,
+  getHourlyCost,
   getFilters,
   getHealth,
   getModelCost,
@@ -116,6 +117,33 @@ export const createApp = (db, dependencies) => {
     "/api/summary",
     requireIntegers((req, res) => res.json(getSummary(db, req.parsedParams.days ?? 7)), ["days"]),
   );
+
+  app.get("/api/hourly", (req, res) => {
+    const { day, cwd, provider } = req.query;
+    // The drill-down is always one day, and the day comes from a chart bar, so a
+    // non-date here means a broken caller rather than a missing filter.
+    if (!isIsoDate(day)) {
+      res.status(400).json({ error: "invalid_parameter", parameter: "day", received: day });
+      return;
+    }
+    const offset = parseInteger(req.query.tzOffsetMinutes);
+    if (offset === undefined) {
+      res.status(400).json({
+        error: "invalid_parameter",
+        parameter: "tzOffsetMinutes",
+        received: req.query.tzOffsetMinutes,
+      });
+      return;
+    }
+    res.json(
+      getHourlyCost(db, {
+        day,
+        cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
+        provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
+        tzOffsetMinutes: offset ?? 0,
+      }),
+    );
+  });
 
   app.get("/api/daily", (req, res) => {
     const { from, to, cwd, provider } = req.query;

@@ -383,6 +383,23 @@ button.ghost {
   color: var(--ink-soft);
 }
 
+/* Clickable chart bars: the daily bars open that day's hours. */
+.bar-clickable {
+  cursor: pointer;
+}
+
+.bar-clickable:hover {
+  opacity: 0.75;
+}
+
+.legend-hint {
+  font-family: var(--font-numeral);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
 .swatch {
   display: inline-block;
   width: 0.75rem;

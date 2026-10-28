@@ -442,6 +442,7 @@ Server-side, in this order:
 | `GET` | `/api/summary?days=7` | Totals for window: cost, tokens, sessions |
 | `GET` | `/api/summary` | All-time totals plus today, 7d, 30d |
 | `GET` | `/api/daily?from&to&cwd&provider&tzOffset` | Points for the chart |
+| `GET` | `/api/hourly?day&cwd&provider&tzOffset` | One day's 24 hours, zero-filled |
 | `GET` | `/api/sessions?limit&offset&cwd&sort` | Session table, newest first |
 | `GET` | `/api/sessions/:id` | One session, full totals and events |
 | `GET` | `/api/models` | Per-model spend, from `model_cost` |
@@ -463,6 +464,13 @@ Server-side, in this order:
 
 `/api/health` is the operator's sanity check: if `sessionCount` stops tracking
 the file count, the scanner is broken.
+
+`/api/hourly` answers the drill-down question: which hours of a day actually cost
+money. It takes one `day` in the same frame the daily chart labelled it, applies the
+same project and provider filters, and returns all 24 hours including the empty ones,
+so an idle hour is a visible zero rather than a missing bar. Cost lands in the hour the
+usage happened, which is the same basis as the daily chart: a session that starts at
+23:00 and runs past midnight bills its usage to both hours.
 
 ---
 

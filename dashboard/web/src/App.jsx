@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApi } from "./api.js";
 import { PREFERENCES, useTheme } from "./theme.js";
 import { CostChart } from "./components/CostChart.jsx";
+import { HourChart } from "./components/HourChart.jsx";
 import { ModelBreakdown } from "./components/ModelBreakdown.jsx";
 import { SessionTable } from "./components/SessionTable.jsx";
 import { SummaryCards } from "./components/SummaryCards.jsx";
@@ -72,6 +73,8 @@ export const App = () => {
   // UTC is how the data is stored. Bucketing by local day is a display choice, so it
   // defaults off and is applied as an offset the server computes in SQL.
   const [localDays, setLocalDays] = useState(false);
+  // The day whose hours are showing, set by clicking a bar. Null means the daily view.
+  const [drillDay, setDrillDay] = useState(null);
   const theme = useTheme();
 
   const range = RANGES[rangeIndex];
@@ -101,6 +104,16 @@ export const App = () => {
     limit: 15,
     offset: page * 15,
     cwd: project,
+    _k: refreshKey,
+  });
+
+  // Null path means the hook fetches nothing, so the hourly request costs nothing while
+  // the daily view is up.
+  const hourly = useApi(drillDay ? "/api/hourly" : null, {
+    day: drillDay ?? "",
+    cwd: project,
+    provider,
+    tzOffsetMinutes,
     _k: refreshKey,
   });
 
@@ -139,6 +152,8 @@ export const App = () => {
   const changeRange = (index) => {
     setRangeIndex(index);
     setPage(0);
+    // The drill-down is a day inside the current window, so a new window drops out of it.
+    setDrillDay(null);
   };
 
   const changeProject = (value) => {
@@ -220,21 +235,49 @@ export const App = () => {
           <SummaryCards summary={summary.data} loading={summary.loading} />
 
           <Panel
-            title="Daily spend"
+            title={drillDay ? `Spend by hour · ${drillDay}` : "Daily spend"}
             actions={
               <div className="controls">
-                <span className="range-set" role="group" aria-label="Date range">
-                  {RANGES.map((option, index) => (
-                    <button
-                      type="button"
-                      key={option.label}
-                      aria-pressed={index === rangeIndex}
-                      onClick={() => changeRange(index)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </span>
+                {drillDay ? (
+                  <button type="button" className="ghost" onClick={() => setDrillDay(null)}>
+                    ← Daily view
+                  </button>
+                ) : (
+                  <span className="range-set" role="group" aria-label="Date range">
+                    {RANGES.map((option, index) => (
+                      <button
+                        type="button"
+                        key={option.label}
+                        aria-pressed={index === rangeIndex}
+                        onClick={() => changeRange(index)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </span>
+                )}
+                <label>
+                  {drillDay ? "Day" : "Hours for"}
+                  <select
+                    // A select, not only the clickable bar: chart bars cannot be tabbed to.
+                    value={drillDay ?? ""}
+                    onChange={(event) => setDrillDay(event.target.value || null)}
+                  >
+                    <option value="">{drillDay ? "Choose a day" : "All days (daily view)"}</option>
+                    {(chart.data?.points ?? [])
+                      .map((point) => point.day)
+                      .reverse()
+                      .slice(0, 30)
+                      .map((day) => (
+                        <option key={day} value={day}>
+                          {day}
+                        </option>
+                      ))}
+                    {drillDay && !chart.data?.points?.some((point) => point.day === drillDay) && (
+                      <option value={drillDay}>{drillDay}</option>
+                    )}
+                  </select>
+                </label>
                 <label>
                   Project
                   <select value={project} onChange={(event) => changeProject(event.target.value)}>
@@ -260,15 +303,27 @@ export const App = () => {
               </div>
             }
           >
-            {chart.loading && <div className="state">Loading chart…</div>}
-            {!chart.loading && chart.data?.points?.length > 0 && (
-              <CostChart points={chart.data.points} range={chart.data.range} />
+            {!drillDay && chart.loading && <div className="state">Loading chart…</div>}
+            {!drillDay && !chart.loading && chart.data?.points?.length > 0 && (
+              <CostChart points={chart.data.points} range={chart.data.range} onSelectDay={setDrillDay} />
             )}
-            {!chart.loading && chart.data?.points?.length === 0 && (
+            {!drillDay && !chart.loading && chart.data?.points?.length === 0 && (
               <div className="state">
                 No sessions match these filters in this range. Widen the range, or choose
                 “All projects”.
               </div>
+            )}
+
+            {drillDay && hourly.loading && <div className="state">Loading hours…</div>}
+            {drillDay && !hourly.loading && hourly.error && (
+              <div className="state state-error">{hourly.error}</div>
+            )}
+            {drillDay && !hourly.loading && hourly.data && (
+              <HourChart
+                points={hourly.data.points}
+                day={hourly.data.day}
+                tzOffsetMinutes={hourly.data.range?.tzOffsetMinutes ?? 0}
+              />
             )}
           </Panel>
 

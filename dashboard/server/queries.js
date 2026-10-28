@@ -195,6 +195,104 @@ export const getDailyCost = (db, options = {}) => {
 };
 
 /**
+ * Build the SQL fragment that shifts a UTC timestamp into the requested hour.
+ *
+ * Mirrors dayExpression: the shift is applied to the timestamp before formatting, so the
+ * hour labels are in the same frame as the day labels the daily chart shows.
+ *
+ * @param {number} [tzOffsetMinutes] Minutes east of UTC; omitted means UTC
+ * @returns {string} SQL expression producing a 'YYYY-MM-DD HH:00' string
+ */
+const hourExpression = (tzOffsetMinutes) => {
+  const offset = Number(tzOffsetMinutes);
+  const shift = Number.isFinite(offset) && offset !== 0 ? `, '${Math.trunc(offset)} minutes'` : "";
+  return `strftime('%Y-%m-%d %H:00', datetime(u.occurred_at${shift}))`;
+};
+
+/**
+ * Hourly cost points for one day, for the drill-down under the daily chart.
+ *
+ * All 24 hours of the day are returned, empty ones as zeros. A sparse day that shows only
+ * the hours with spend reads as a claim that nothing happened in the gaps, and the whole
+ * point of the hourly view is to say which hours were idle.
+ *
+ * @param {import("better-sqlite3").Database} db
+ * @param {{ day: string, cwd?: string, provider?: string, tzOffsetMinutes?: number }} options
+ *   `day` is the YYYY-MM-DD value the daily chart showed, in the same timezone frame
+ * @returns {{ day: string, range: object, points: { hour: string, label: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[] }}
+ */
+export const getHourlyCost = (db, options = {}) => {
+  const tzOffset = Number(options.tzOffsetMinutes ?? 0);
+  const hour = hourExpression(options.tzOffsetMinutes);
+
+  const filters = [`CAST(${hour} AS TEXT) >= datetime(@day)`, `CAST(${hour} AS TEXT) < datetime(@day, '+1 day')`];
+  const params = { day: options.day };
+
+  if (options.cwd) {
+    filters.push("s.cwd = @cwd");
+    params.cwd = options.cwd;
+  }
+  if (options.provider) {
+    filters.push("u.provider = @provider");
+    params.provider = options.provider;
+  }
+  const whereClause = `WHERE ${filters.join(" AND ")}`;
+
+  const rows = db
+    .prepare(
+      `SELECT ${hour} AS hour,
+              COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
+              COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
+              COUNT(DISTINCT u.session_id)     AS sessions
+       FROM usage_events u
+       JOIN sessions s ON s.session_id = u.session_id
+       ${whereClause}
+       GROUP BY hour
+       ORDER BY hour`,
+    )
+    .all(params);
+
+  const pointsByHour = new Map(rows.map((row) => [row.hour, row]));
+
+  // 24 fixed labels for the day, in the requested timezone frame.
+  const hours = db
+    .prepare(
+      `WITH hours AS (
+         SELECT strftime('%Y-%m-%d %H:00', datetime(date(@day))) AS hour
+         UNION ALL
+         SELECT strftime('%Y-%m-%d %H:00', datetime(hour, '+1 hour'))
+         FROM hours
+         WHERE datetime(hour, '+1 hour') < datetime(date(@day), '+1 day')
+       )
+       SELECT hour FROM hours ORDER BY hour`,
+    )
+    .all({ day: options.day });
+
+  const points = hours.map(({ hour: hourValue }) => {
+    const row = pointsByHour.get(hourValue) ?? { cost_micros: 0, total_tokens: 0, sessions: 0 };
+    return {
+      hour: hourValue,
+      label: hourValue.slice(11, 16),
+      ...money(row.cost_micros),
+      totalTokens: row.total_tokens,
+      sessions: row.sessions,
+    };
+  });
+
+  return {
+    day: options.day,
+    range: {
+      from: hours[0]?.hour ?? null,
+      to: hours[hours.length - 1]?.hour ?? null,
+      tzOffsetMinutes: Number.isFinite(tzOffset) ? Math.trunc(tzOffset) : 0,
+    },
+    totalCostMicros: points.reduce((sum, point) => sum + point.costMicros, 0),
+    totalCostUsd: formatUsd(points.reduce((sum, point) => sum + point.costMicros, 0)),
+    points,
+  };
+};
+
+/**
  * Session list, newest activity first.
  * @param {import("better-sqlite3").Database} db
  * @param {{ limit?: number, offset?: number, cwd?: string, provider?: string, sort?: "activity" | "cost" }} [options]
