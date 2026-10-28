@@ -153,8 +153,7 @@ export const App = () => {
           <h1>Pi session spend</h1>
           <p>What the agents cost, by day, project, and model.</p>
           {loading && <p className="eyebrow">Loading…</p>}
-          {!loading && refreshing && <p className="eyebrow updating">Updating…</p>}
-          {!loading && !refreshing && health.data && (
+          {!loading && health.data && (
             <p className="eyebrow">
               {health.data.sessionCount} sessions · {health.data.usageEventCount} usage records
               {health.data.lastScanAt
@@ -167,6 +166,18 @@ export const App = () => {
         </div>
         <span className="spacer" />
         <span className="controls">
+          {/* Refresh status is a fixed-size dot, never a swap of the sentence above it. Two
+              lines of status text becoming one line of "Updating…" shortened the masthead by
+              a line, and every panel below jumped up and back down on each refresh. */}
+          <span
+            className="refresh-dot"
+            data-active={refreshing ? "true" : "false"}
+            role="status"
+            aria-label={refreshing ? "Updating" : "Up to date"}
+            title={refreshing ? "Updating…" : updatedAt ? `Updated ${updatedAt.toLocaleTimeString()}` : ""}
+          >
+            <span className="sr-only">{refreshing ? "Updating" : "Up to date"}</span>
+          </span>
           <span className="theme-set" role="group" aria-label="Color theme">
             {PREFERENCES.map((option) => (
               <button
