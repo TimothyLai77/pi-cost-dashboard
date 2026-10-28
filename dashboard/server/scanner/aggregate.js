@@ -1,0 +1,229 @@
+/**
+ * Cost aggregation for one Pi session file.
+ *
+ * Pi stores sessions as JSONL (one JSON object per line). Cost is not stored as a
+ * session total; it is spread across the entries that carry model usage. This module
+ * reproduces Pi's own accounting so the dashboard's numbers match what `/session`
+ * shows inside Pi.
+ *
+ * Pi's formula (AgentSession.getSessionStats, dist/core/agent-session.js:3445) sums
+ * `usage` from five places:
+ *
+ *   1. assistant messages
+ *   2. tool-result messages that report usage (tools making nested model calls)
+ *   3. `usage` entries            (cache warming, extension-reported usage)
+ *   4. `compaction` entries       (the LLM call that wrote the summary)
+ *   5. `branch_summary` entries   (the LLM call that summarized an abandoned branch)
+ *
+ * It iterates getEntries(), which is every entry on every branch, not just the
+ * current branch. Abandoned branches were paid for, so a branch-only sum under-reports
+ * on forked sessions.
+ *
+ * Money is kept in integer micro-US dollars (1e-6 USD). SQLite has no DECIMAL type and
+ * sums of doubles drift, so rounding happens exactly once per entry here and every
+ * downstream sum is integer arithmetic.
+ */
+
+import { readFileSync } from "node:fs";
+
+/** Micro-dollars per US dollar. @type {number} */
+const MICRO_DOLLARS_PER_DOLLAR = 1e6;
+
+/**
+ * Convert a US dollar amount to integer micro-dollars.
+ * @param {number | undefined} dollars Value from `usage.cost.total`; may be absent
+ * @returns {number} Rounded micro-dollars, 0 when absent
+ */
+const toMicroDollars = (dollars) =>
+  Number.isFinite(dollars) ? Math.round(dollars * MICRO_DOLLARS_PER_DOLLAR) : 0;
+
+/**
+ * Read the `usage` block from a session entry, when that entry type contributes one.
+ *
+ * @param {any} entry A parsed session entry
+ * @returns {{ entryKind: string, usage: any } | null} null when the entry carries no usage
+ */
+const usageFromEntry = (entry) => {
+  if (entry.type === "usage") return { entryKind: "usage", usage: entry.usage };
+  if (entry.type === "compaction") return { entryKind: "compaction", usage: entry.usage };
+  if (entry.type === "branch_summary") return { entryKind: "branch_summary", usage: entry.usage };
+  if (entry.type !== "message") return null;
+
+  const message = entry.message ?? {};
+  if (message.role === "assistant") return { entryKind: "assistant", usage: message.usage };
+  if (message.role === "toolResult") return { entryKind: "tool_result", usage: message.usage };
+  return null;
+};
+
+/**
+ * Build one usage fact row from an entry that carries usage.
+ *
+ * Provider and model come from the entry itself: assistant messages name the model that
+ * answered, and `usage` entries name the model they were attributed to.
+ *
+ * @param {any} entry A parsed session entry
+ * @param {string} entryKind One of assistant, tool_result, usage, compaction, branch_summary
+ * @param {any} usage The entry's usage block
+ * @returns {object} A usage_events-shaped record
+ */
+const buildEvent = (entry, entryKind, usage) => {
+  const message = entry.message ?? {};
+  return {
+    entryId: entry.id,
+    kind: entryKind,
+    occurredAt: entry.timestamp,
+    provider: message.provider ?? entry.provider ?? null,
+    modelId: message.model ?? entry.model ?? null,
+    inputTokens: usage.input ?? 0,
+    outputTokens: usage.output ?? 0,
+    cacheReadTokens: usage.cacheRead ?? 0,
+    cacheWriteTokens: usage.cacheWrite ?? 0,
+    totalTokens: usage.totalTokens ?? 0,
+    costMicros: toMicroDollars(usage.cost?.total),
+  };
+};
+
+/**
+ * Aggregate one Pi session file into a session rollup plus per-entry usage facts.
+ *
+ * Every usage-bearing entry becomes a fact row so cost can be attributed to the day it
+ * occurred. A session that runs across three days must not bill all of its cost to the
+ * day it started.
+ *
+ * Aborted and errored assistant messages keep their usage, matching Pi: the request was
+ * sent and billed.
+ *
+ * @param {string} filePath Absolute path to a session `.jsonl` file
+ * @param {string} [fileContents] Pre-read file text; read from disk when omitted
+ * @returns {{
+ *   session: {
+ *     sessionId: string, sessionFile: string, parentSessionId: string | null,
+ *     cwd: string, name: string | null, startedAt: string | null,
+ *     lastActivityAt: string | null, entryCount: number,
+ *     costMicros: number, inputTokens: number, outputTokens: number,
+ *     cacheReadTokens: number, cacheWriteTokens: number, totalTokens: number,
+ *     userMessages: number, assistantMessages: number, toolCalls: number,
+ *     toolResults: number, totalMessages: number
+ *   },
+ *   events: object[],
+ *   skippedLines: number,
+ *   warnings: string[],
+ *   missingUsageCount: Record<string, number>
+ * }}
+ */
+export const aggregateSession = (filePath, fileContents) => {
+  const text = fileContents ?? readFileSync(filePath, "utf8");
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+
+  const session = {
+    sessionId: null,
+    sessionFile: filePath,
+    parentSessionId: null,
+    cwd: null,
+    name: null,
+    startedAt: null,
+    lastActivityAt: null,
+    entryCount: 0,
+    costMicros: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    userMessages: 0,
+    assistantMessages: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 0,
+  };
+  const events = [];
+  const warnings = [];
+  const missingUsageCount = {};
+  let skippedLines = 0;
+
+  for (const line of lines) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      // Pi writes complete JSON per line, so a bad line means a truncated tail from a
+      // crash. Skip it and report it rather than failing the whole file.
+      skippedLines += 1;
+      continue;
+    }
+
+    // The header is metadata and is not part of the entry tree.
+    if (entry.type === "session") {
+      session.sessionId = entry.id ?? null;
+      session.cwd = entry.cwd ?? null;
+      session.parentSessionId = entry.parentSession ?? null;
+      session.startedAt = entry.timestamp ?? null;
+      continue;
+    }
+
+    session.entryCount += 1;
+
+    // Timestamps are ISO-8601 with fixed-width milliseconds, so lexicographic
+    // comparison is chronological for the format Pi writes.
+    if (typeof entry.timestamp === "string" && entry.timestamp > (session.lastActivityAt ?? "")) {
+      session.lastActivityAt = entry.timestamp;
+    }
+
+    if (entry.type === "session_info" && typeof entry.name === "string" && entry.name.length > 0) {
+      session.name = entry.name;
+    }
+
+    if (entry.type === "message") {
+      session.totalMessages += 1;
+      const role = entry.message?.role;
+      if (role === "user") session.userMessages += 1;
+      if (role === "toolResult") session.toolResults += 1;
+      if (role === "assistant") {
+        session.assistantMessages += 1;
+        const content = entry.message?.content;
+        if (Array.isArray(content)) {
+          session.toolCalls += content.filter((block) => block?.type === "toolCall").length;
+        }
+      }
+    }
+
+    const found = usageFromEntry(entry);
+    if (!found) continue;
+
+    // A missing usage block is normal for toolResult messages and for older compaction
+    // and branch_summary entries, so it is counted rather than warned about: Pi's own
+    // formula guards with `if (usage)` and skips them silently. A `usage` entry with no
+    // usage block is malformed, because that entry type exists only to carry usage.
+    if (!found.usage) {
+      missingUsageCount[found.entryKind] = (missingUsageCount[found.entryKind] ?? 0) + 1;
+      if (found.entryKind === "usage") {
+        warnings.push(`usage entry ${entry.id} (kind ${entry.kind}) has no usage block`);
+      }
+      continue;
+    }
+
+    const event = buildEvent(entry, found.entryKind, found.usage);
+    events.push(event);
+
+    session.costMicros += event.costMicros;
+    session.inputTokens += event.inputTokens;
+    session.outputTokens += event.outputTokens;
+    session.cacheReadTokens += event.cacheReadTokens;
+    session.cacheWriteTokens += event.cacheWriteTokens;
+    session.totalTokens += event.totalTokens;
+  }
+
+  if (!session.sessionId) warnings.push("no session header found");
+  if (skippedLines > 0) {
+    warnings.push(`${skippedLines} unparseable line(s); the file may be truncated`);
+  }
+
+  return { session, events, skippedLines, warnings, missingUsageCount };
+};
+
+/**
+ * Format micro-dollars as a US dollar string.
+ * @param {number} microDollars Integer micro-dollars
+ * @returns {string} e.g. "$0.61"
+ */
+export const formatUsd = (microDollars) => `$${(microDollars / MICRO_DOLLARS_PER_DOLLAR).toFixed(2)}`;

@@ -52,9 +52,16 @@ This matches Pi's own implementation in
 | Entry | Field read | Why it counts |
 |---|---|---|
 | `{type:"message", message.role:"assistant"}` | `message.usage` | The model response |
-| `{type:"usage", kind:"..."}` | `usage` | Cache warming, tool-reported usage |
+| `{type:"message", message.role:"toolResult"}` | `message.usage` | Tools that make nested model calls report that usage here |
+| `{type:"usage", kind:"..."}` | `usage` | Cache warming, extension-reported usage |
 | `{type:"compaction"}` | `usage` | LLM call that generated the summary |
 | `{type:"branch_summary"}` | `usage` | LLM call that summarized an abandoned branch |
+
+Tool-result usage is easy to miss. `docs/extensions.md` states that the `usage` of
+nested tool calls is folded into the calling tool's result, and Pi's stats loop adds
+`message.usage` whenever a tool-result message carries it. A dashboard built only from
+assistant messages silently drops that money. Most tool results carry no usage at all,
+so the field is optional and absence is normal, not an error.
 
 ```js
 totalCost = Σ (usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite)
@@ -84,6 +91,10 @@ without changing it.
 catalog (`cost.input` = USD per million tokens, `docs/models-configuration.md`).
 A model with no price configured reports tokens at zero cost.
 
+**Aborted and errored responses keep their usage.** Pi adds usage from every
+assistant message regardless of `stopReason`, because the request was sent and
+billed. Skipping aborted messages under-reports.
+
 ### Measured against this machine
 
 Numbers below came from reading the live session directory, and they drive
@@ -96,18 +107,33 @@ several design decisions.
 | Full scan of everything | 433 ms |
 | Largest single session | 18.6 MB, 4,682 entries |
 | Cost summation, in memory, largest session | 0.27 ms |
-| Total spend recorded to date | $60.97 |
+| Total spend recorded to date | $62.21 |
 | Distinct days with activity | 58 |
 | Assistant messages | 13,898 |
 | ...with cost above zero | 3,695 |
 | ...reporting exactly zero | 10,203 |
 | Sessions with any cost | 93 of 266 |
+| Usage-bearing entries (facts) | 13,973 |
+| ...of which tool-result usage | 6 |
 
 By provider: `llama.cpp` $55.20, `strata` $4.78, `llamacpp-secondary` $0.00.
+
+The dollar total is a snapshot, not a constant: the session directory grows as Pi
+is used, so the integration test in §15 compares on structure and formula, not on a
+frozen dollar figure.
 
 So the fine-grained table below will hold roughly 14k rows today and about
 85k rows a year at the current rate. That is small for SQLite, and it is what
 makes accurate daily charting possible.
+
+### Cross-check
+
+The aggregator was validated against an independently written scanner
+(Appendix A) over all 266 real session files: both produced **$62.2134**, with
+zero files where the new aggregator reported less than the reference, and 13,973
+facts versus the reference's 13,967. The six-row gap is tool-result usage, which
+the reference formula omits and Pi bills. See §5 for the ingest contract this
+feeds.
 
 ---
 
@@ -216,7 +242,7 @@ CREATE TABLE usage_events (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id          TEXT    NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
   entry_id            TEXT    NOT NULL,                 -- session entry id
-  kind                TEXT    NOT NULL CHECK (kind IN ('assistant','usage','compaction','branch_summary')),
+  kind                TEXT    NOT NULL CHECK (kind IN ('assistant','tool_result','usage','compaction','branch_summary')),
   occurred_at         TEXT    NOT NULL,                 -- entry timestamp, ISO-8601 UTC
   provider            TEXT,                             -- assistant messages only
   model_id            TEXT,
@@ -339,7 +365,7 @@ session files on its own.
     {
       "entryId": "b2c3d4e5",
       "kind": "assistant",
-      "occurredAt": "2026-10-28T16:41:02.117Z",
+      "occurredAt": "2026-01-01T10:00:03.000Z",
       "provider": "anthropic",
       "modelId": "claude-sonnet-4-5",
       "inputTokens": 47,
@@ -348,6 +374,19 @@ session files on its own.
       "cacheWriteTokens": 0,
       "totalTokens": 17683,
       "costMicros": 633
+    },
+    {
+      "entryId": "c3d4e5f6",
+      "kind": "tool_result",
+      "occurredAt": "2026-01-01T10:00:04.000Z",
+      "provider": "anthropic",
+      "modelId": "claude-sonnet-4-5",
+      "inputTokens": 10,
+      "outputTokens": 20,
+      "cacheReadTokens": 30,
+      "cacheWriteTokens": 0,
+      "totalTokens": 60,
+      "costMicros": 500
     }
   ],
   "reportedBy": "agent_settled",
@@ -434,6 +473,10 @@ resumed. Rules, in order of precedence:
 
 Ingest upsert (the guard is the `WHERE` clause, which SQLite supports in
 `ON CONFLICT DO UPDATE`):
+
+Provider and model come from the entry: assistant and tool-result messages name the
+model that answered, and `usage` entries name the model they are attributed to.
+Tool-result usage is billed against the model the nested call used.
 
 ```sql
 INSERT INTO sessions (session_id, session_file, cwd, name, started_at, last_activity_at,
@@ -826,11 +869,11 @@ version cannot quietly start shipping transcript data into the database.
 
 | Level | Checks |
 |---|---|
-| Unit: `aggregate.js` | Fixture JSONL with all four usage-bearing entry types; asserts cost equals the sum of all four, and that a `usage`-only session (cache warm) is counted |
+| Unit: `aggregate.js` | Fixture JSONL with all five usage-bearing entry types; asserts cost equals the sum of all five, that tool-result usage is billed, that aborted assistant usage is counted, and that a `usage`-only session (cache warm) is counted |
 | Unit: scanner | Cold scan, warm scan with unchanged files skips all, changed mtime re-parses one, missing file deletes the row |
 | Unit: ingest guard | Stale `entryCount` rejected; equal accepted; out-of-order arrival never lowers `cost_micros` |
 | Unit: validation | Bad `schemaVersion`, negative token, non-numeric cost, oversized body, unknown key |
-| Integration | Backfill this machine's 266 sessions, assert total ≈ $60.97 and count = 266 |
+| Integration | Backfill this machine's 266 sessions, assert the grand total equals the independent Appendix A scanner run in the same second, and assert session row count equals the `.jsonl` file count |
 | Integration | Chart query returns 58 day buckets with correct UTC grouping |
 | Extension | Load with `pi --extension ./pi-cost.ts`; run `/pi-cost`; confirm totals match `/session` for the same session |
 | Extension perf | Point `PI_COST_URL` at a sink that sleeps 5 s; confirm the next prompt is not delayed, proving the report is not awaited |
@@ -941,7 +984,9 @@ for (const r of rows) byProject.set(r.cwd, (byProject.get(r.cwd) ?? 0) + r.costM
 
 | Fact | Source |
 |---|---|
-| Cost formula: assistant + usage + compaction + branch_summary | `dist/core/usage-totals.js`, `dist/core/agent-session.js:3445` |
+| Cost formula: assistant + tool-result + usage + compaction + branch_summary | `dist/core/usage-totals.js`, `dist/core/agent-session.js:3445-3480` |
+| Tool-result messages can carry usage, and Pi bills it | `dist/core/agent-session.js:3466-3471`, `docs/extensions.md` nested-call usage |
+| Nested tool usage is folded into the calling tool's result `usage` | `docs/extensions.md` (custom tools) |
 | Pi's stats use all entries, not the current branch | `dist/core/agent-session.js:3452` (`getEntries()`) |
 | `SessionStats` includes `cost` and token breakdown | `dist/core/agent-session.d.ts:200-218` |
 | Extensions get `ReadonlySessionManager`, no `getSessionStats()` | `dist/core/extensions/types.d.ts:213`, `dist/core/session-manager.d.ts:178` |
