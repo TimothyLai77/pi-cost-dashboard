@@ -805,8 +805,10 @@ Two palettes on one token set, switched by `<html data-theme>`. Light is the ori
 ink-on-cool-paper ledger. Dark is "Ledger slate": same temperature, inverted surface
 (`#14171a` page, `#1b1f23` panels), with the money accent lifted from `#a6541f` to
 `#e0873d` so cost figures stay the loudest numbers on the page. Chosen by contrast math,
-not by eye: every dark text pair clears WCAG AA (body 14.8:1, secondary 9.4:1, eyebrow
-5.4:1) and chart fills clear 3:1 against the page.
+not by eye: every text pair clears WCAG AA in both palettes (light 16.1 / 7.0 / 4.60:1 for
+body, secondary, eyebrow; dark 14.8 / 9.4 / 5.42:1) and chart fills clear 3:1 against the
+page. Auditing the dark set is what found a pre-existing light-mode miss: `--ink-faint`,
+used for 11px uppercase eyebrows, measured 3.42:1 and is now `#67707a` at 4.60:1.
 
 Two deliberate differences, not just an inversion:
 

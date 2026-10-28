@@ -185,8 +185,11 @@ rollup against the sum of its own facts.
   dark slate reads as a hyperlink, and lilac keeps "this session is running now" from
   competing with the amber that carries money. The masthead's 2px rule has its own token
   (`--rule-accent`): full ink on dark slate is 14.8:1 and reads as a lit line, so dark
-  softens it to silver at 9.4:1. Every dark text pair clears WCAG AA (body 14.8:1,
-  secondary 9.4:1, eyebrows 5.4:1) and the chart fills clear 3:1 against the page.
+  softens it to silver at 9.4:1. Every text pair clears WCAG AA in **both** palettes —
+  light body 16.1:1, secondary 7.0:1, eyebrow 4.60:1; dark body 14.8:1, secondary 9.4:1,
+  eyebrow 5.42:1 — and chart fills clear 3:1 against the page. The light eyebrow needed a
+  fix to get there: `--ink-faint` was `#7c858f` at 3.42:1, under AA for 11px uppercase
+  labels, so it is now `#67707a`, the lightest value that clears 4.5:1.
   `theme.js` owns the setting (Auto follows the operating system, Light and Dark pin it,
   choice stored in localStorage), and an inline script in `index.html` applies it before
   the first paint so a reload in dark mode does not flash light first. Form controls get

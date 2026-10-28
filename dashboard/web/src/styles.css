@@ -8,7 +8,9 @@
   --paper-raised: #fbfbf9;
   --ink: #16191d;
   --ink-soft: #4b545e;
-  --ink-faint: #7c858f;
+  /* Eyebrows are 11px uppercase labels, which need 4.5:1. The original #7c858f measured
+     3.42:1 on paper; this is the lightest value that clears AA. */
+  --ink-faint: #67707a;
   --rule: #d9dcd6;
   --rule-strong: #b9bdb6;
   --money: #a6541f;
