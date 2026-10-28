@@ -6,6 +6,11 @@
  * numbers came from the extension rather than a file scan; the recency part is what makes
  * the tag mean "this session is running now", which matters in a deployment where the
  * server never scans files and every row is push-sourced.
+ *
+ * Tokens are shown as a total with the four kinds spelled out under it. `totalTokens` is
+ * input + output + cache reads + cache writes, and cache reads dominate it, because every
+ * model call reports the cached prefix it re-read. A session that cost $13.73 can show 113M
+ * tokens of which 112M are cache reads, so the bare total is not comparable to the cost.
  */
 
 import { formatCost, formatTokens, shortProject } from "../api.js";
@@ -25,6 +30,23 @@ const isActiveNow = (lastActivityAt) => {
   const ageMinutes = (Date.now() - then) / 60000;
   return ageMinutes >= 0 && ageMinutes <= LIVE_WINDOW_MINUTES;
 };
+
+/**
+ * The four token kinds behind a session's total, in words.
+ *
+ * Cache write is left out when it is zero, which is the common case, so the line stays short
+ * for the rows people actually read.
+ *
+ * @param {{ inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number }} session
+ * @returns {string} e.g. "cache read 112M · in 415k · out 466k"
+ */
+const tokenKinds = (session) =>
+  [
+    `cache read ${formatTokens(session.cacheReadTokens ?? 0)}`,
+    `in ${formatTokens(session.inputTokens ?? 0)}`,
+    `out ${formatTokens(session.outputTokens ?? 0)}`,
+    ...(session.cacheWriteTokens > 0 ? [`cache write ${formatTokens(session.cacheWriteTokens)}`] : []),
+  ].join(" · ");
 
 /**
  * @param {{
@@ -54,7 +76,9 @@ export const SessionTable = ({ result, onPrev, onNext }) => {
               Last activity
             </th>
             <th scope="col" className="numeric">
-              Tokens
+              <span title="input + output + cache reads + cache writes. Cache reads are counted again on every model call, so they dominate long sessions and are usually priced far below input.">
+                Total tokens
+              </span>
             </th>
             <th scope="col" className="numeric">
               Cost
@@ -86,7 +110,12 @@ export const SessionTable = ({ result, onPrev, onNext }) => {
                 <span className="session-project">{shortProject(session.cwd)}</span>
               </td>
               <td className="hide-narrow numeral">{session.lastActivityAt?.slice(0, 16).replace("T", " ")}Z</td>
-              <td className="numeric numeral">{formatTokens(session.totalTokens)}</td>
+              <td className="numeric numeral">
+                <span className="token-total" title={tokenKinds(session)}>
+                  {formatTokens(session.totalTokens)}
+                </span>
+                <span className="token-kinds">{tokenKinds(session)}</span>
+              </td>
               <td className="cost numeral">
                 {session.costMicros === 0 ? "—" : formatCost(session.costMicros, session.costMicros < 10000 ? 4 : 2)}
               </td>

@@ -214,12 +214,23 @@ body {
 /* --- summary ledger strip --- */
 
 .summary {
+  margin-bottom: var(--space-5);
+}
+
+.summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: 1px;
   background: var(--rule);
   border: 1px solid var(--rule);
-  margin-bottom: var(--space-5);
+}
+
+/* Says what the token figures mean: the totals include cache reads, which dwarf the rest. */
+.summary-note {
+  margin: var(--space-2) 0 0;
+  color: var(--ink-faint);
+  font-size: 0.6875rem;
+  max-width: 60rem;
 }
 
 .summary-cell {
@@ -242,6 +253,15 @@ body {
   margin-top: var(--space-1);
   color: var(--ink-faint);
   font-size: 0.75rem;
+}
+
+/* The four kinds under the total, quieter than the total itself. */
+.summary-cell .sub-kinds {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--ink-faint);
+  font-size: 0.625rem;
+  opacity: 0.75;
 }
 
 /* --- panels --- */
@@ -509,6 +529,18 @@ button.ghost {
   text-align: right;
 }
 
+/* The four kinds behind the total. Cache reads are the bulk of the number, so the split is
+   shown rather than left in a tooltip. */
+.sessions .token-kinds {
+  display: block;
+  color: var(--ink-faint);
+  font-size: 0.625rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
 .sessions tr:hover td {
   background: var(--paper);
 }
@@ -633,12 +665,17 @@ button.ghost {
     padding: var(--space-4) var(--space-3) var(--space-5);
   }
 
-  .summary {
+  .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .sessions th.hide-narrow,
   .sessions td.hide-narrow {
+    display: none;
+  }
+
+  /* Keep the total on narrow screens and drop the breakdown to the tooltip. */
+  .sessions .token-kinds {
     display: none;
   }
 }

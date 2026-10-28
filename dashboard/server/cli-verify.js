@@ -7,8 +7,9 @@
  * dashboard numbers.
  *
  *   1. session row count equals the number of session files
- *   2. grand total cost in the database equals the sum of freshly aggregated files
- *   3. stored rollup per session equals that session's stored facts
+ *   2. grand total cost and tokens in the database equal the sum of freshly aggregated files
+ *   3. stored rollup per session equals that session's stored facts, and its stored cost and
+ *      token total equal what the file itself says
  *
  * It rescans first, from the same file state it measures against. A running Pi session
  * is appended to continuously, so a check that measured the database from an older scan
@@ -61,6 +62,17 @@ console.log(`cost in database ${formatUsd(storedMicros)} (${storedMicros} micros
 const costOk = freshMicros === storedMicros;
 console.log(`cost check       ${costOk ? "OK" : "MISMATCH"}`);
 
+// Tokens get the same file-to-database check as cost. Comparing rollups against facts only
+// proves the two stored copies agree; it says nothing about a scanner that summed the facts
+// wrongly in the first place, and a token total is easy to inflate by counting a usage entry
+// twice.
+const freshTokens = freshTotals.reduce((sum, session) => sum + session.totalTokens, 0);
+const storedTokens = stored.reduce((sum, row) => sum + row.total_tokens, 0);
+console.log(`tokens from files ${freshTokens}`);
+console.log(`tokens in database ${storedTokens}`);
+const tokensOk = freshTokens === storedTokens;
+console.log(`token check      ${tokensOk ? "OK" : "MISMATCH"}`);
+
 /**
  * Sum of stored facts for one session. A session with no usage facts has no row from
  * GROUP BY, which means zero, not missing data.
@@ -98,6 +110,9 @@ for (const session of freshTotals) {
   if (session.costMicros !== (rollup?.cost_micros ?? 0)) {
     problems.push(`file cost ${session.costMicros} vs stored cost ${rollup?.cost_micros ?? 0}`);
   }
+  if (rollup && session.totalTokens !== rollup.total_tokens) {
+    problems.push(`file tokens ${session.totalTokens} vs stored tokens ${rollup.total_tokens}`);
+  }
 
   if (problems.length > 0) {
     factsMismatched += 1;
@@ -113,6 +128,6 @@ const dailyDays = db.prepare("SELECT COUNT(DISTINCT day) AS days FROM daily_cost
 const modelRows = db.prepare("SELECT COUNT(*) AS rows FROM model_cost").get().rows;
 console.log(`views          daily_cost ${dailyDays} day bucket(s), model_cost ${modelRows} model(s)`);
 
-const allOk = countOk && costOk && factsMismatched === 0;
+const allOk = countOk && costOk && tokensOk && factsMismatched === 0;
 db.close();
 process.exit(allOk ? 0 : 1);

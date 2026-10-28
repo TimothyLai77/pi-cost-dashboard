@@ -377,6 +377,13 @@ export const getHourlyCost = (db, options = {}) => {
 
 /**
  * Session list, newest activity first.
+ *
+ * Token counts are returned broken out as well as total, because `total_tokens` is a sum of
+ * four very different things and cache reads dominate it: every model call re-reports the
+ * cached prefix it read. A session that cost $13.73 can show 113M total tokens, of which
+ * 112M are cache reads billed at the model's cache rate. The breakdown is what lets the
+ * session list say so next to the number.
+ *
  * @param {import("better-sqlite3").Database} db
  * @param {{ limit?: number, offset?: number, cwd?: string, provider?: string, sort?: "activity" | "cost" }} [options]
  * @returns {{ total: number, limit: number, offset: number, sessions: object[] }}
@@ -412,7 +419,8 @@ export const getSessions = (db, options = {}) => {
     .prepare(
       `SELECT s.session_id, s.session_file, s.parent_session_id, s.cwd, s.name,
               s.started_at, s.last_activity_at, s.entry_count, s.cost_micros,
-              s.total_tokens, s.user_messages, s.assistant_messages, s.tool_calls,
+              s.total_tokens, s.input_tokens, s.output_tokens, s.cache_read_tokens,
+              s.cache_write_tokens, s.user_messages, s.assistant_messages, s.tool_calls,
               s.last_source
        FROM sessions s
        ${whereClause}
@@ -439,6 +447,10 @@ export const getSessions = (db, options = {}) => {
       entryCount: row.entry_count,
       ...money(row.cost_micros),
       totalTokens: row.total_tokens,
+      inputTokens: row.input_tokens,
+      outputTokens: row.output_tokens,
+      cacheReadTokens: row.cache_read_tokens,
+      cacheWriteTokens: row.cache_write_tokens,
       userMessages: row.user_messages,
       assistantMessages: row.assistant_messages,
       toolCalls: row.tool_calls,

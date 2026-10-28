@@ -158,10 +158,11 @@ Every aggregate also takes `subagents=1` (default, count nested sessions) or
 own session file and again inside its parent's tool-result usage, so totals count
 both by default; the session list marks nested rows with a `subagent` tag.
 
-Token figures on the charts are cumulative across model calls, not context size: a
-long session re-reads its cached context on every call, so cache reads dominate the
-total. Chart tooltips break the number out into cache read, output, input, and
-cache write.
+Token figures are cumulative across model calls, not context size: a long session re-read its
+cached context on every call, so cache reads dominate the total — today's 114M tokens on this
+machine are 113M cache reads, priced at zero, over $14.47 of spend. Every place that shows a
+token total also shows the split into cache read, input, output, and cache write: the summary
+strip, the session list, the chart tooltips, and the model ledger.
 
 ## Timezone
 
@@ -189,8 +190,8 @@ shows the same answer.
 | `scan_state` | one row per session file | `(mtime, size)` cache; unchanged files are skipped |
 
 `daily_cost` and `model_cost` are views over `usage_events`, so rollups cannot drift out
-of sync with the facts. `npm run verify` checks row counts, grand total, and each
-rollup against the sum of its own facts.
+of sync with the facts. `npm run verify` checks row counts, grand total cost, grand total
+tokens, and each rollup against both its own facts and the session file it came from.
 
 ## Notes from building this
 

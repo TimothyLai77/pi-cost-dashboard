@@ -68,7 +68,9 @@ export const CostChart = ({ points, range, onSelectDay }) => {
         </span>
         <span>
           <span className="swatch swatch-volume" />
-          Token volume
+          <span title="input + output + cache reads + cache writes. Cache reads are counted again on every model call, so this bar tracks model calls x context size, not spend.">
+            Token volume · incl. cache reads
+          </span>
         </span>
         <span className="numeral">
           {range?.from ?? "—"} → {range?.to ?? "—"}

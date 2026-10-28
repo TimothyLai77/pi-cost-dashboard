@@ -178,6 +178,34 @@ test("getSessions paginates, sorts, and clamps the page size", () => {
   db.close();
 });
 
+test("getSessions breaks out the token kinds behind totalTokens", () => {
+  const db = seededDb();
+  const rows = getSessions(db, { limit: 10 }).sessions;
+
+  for (const row of rows) {
+    assert.equal(
+      row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheWriteTokens,
+      row.totalTokens,
+      "the four kinds add up to the headline total",
+    );
+
+    const detail = getSessionById(db, row.sessionId);
+    assert.equal(row.inputTokens, detail.tokens.input, "list input matches detail");
+    assert.equal(row.outputTokens, detail.tokens.output, "list output matches detail");
+    assert.equal(row.cacheReadTokens, detail.tokens.cacheRead, "list cache read matches detail");
+    assert.equal(row.cacheWriteTokens, detail.tokens.cacheWrite, "list cache write matches detail");
+  }
+
+  // Cache reads dominate a long session, which is exactly what the flat total hides.
+  const caching = rows.find((row) => row.cacheReadTokens > 0);
+  assert.ok(
+    caching.cacheReadTokens > caching.inputTokens + caching.outputTokens,
+    "cache reads outweigh the billable kinds",
+  );
+
+  db.close();
+});
+
 test("getSessionById returns the session with its facts, null when absent", () => {
   const db = seededDb();
   const id = db.prepare("SELECT session_id FROM sessions WHERE cwd = '/home/user/project-a'").get().session_id;
