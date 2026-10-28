@@ -436,13 +436,6 @@ button.ghost {
   background: var(--volume);
 }
 
-.chart-note {
-  padding: var(--space-2) 0 0;
-  font-size: 0.8125rem;
-  color: var(--ink-soft);
-  max-width: 60ch;
-}
-
 /* --- model ledger --- */
 
 .ledger {

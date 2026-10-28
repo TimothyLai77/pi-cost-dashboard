@@ -4,6 +4,9 @@
  * Same two-layer reading as the daily chart: cost bars on the left axis, token volume as a
  * quiet area behind them. All 24 hours are drawn, including the empty ones, because the
  * idle hours are the answer to "when was this machine actually burning money".
+ *
+ * Like the daily chart, it prints no caption: the 24 hour labels, the bars, and the volume
+ * band carry the reading, and the zone is in the legend next to the day.
  */
 
 import {
@@ -55,8 +58,6 @@ const HourTooltip = ({ active, payload }) => {
  */
 export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC" }) => {
   const busiestHour = points.reduce((max, point) => Math.max(max, point.totalTokens), 0);
-  const billedHours = points.filter((point) => point.costMicros > 0).length;
-  const activeHours = points.filter((point) => point.totalTokens > 0).length;
   const zone = `${timeZone} ${offsetLabel}`;
 
   return (
@@ -116,13 +117,6 @@ export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC" }
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-
-      <p className="chart-note">
-        <span className="numeral">{activeHours}</span> of 24 hours used the agent,{" "}
-        <span className="numeral">{billedHours}</span> of them billed something. Hours are clock
-        hours in <span className="numeral">{zone}</span>. Token counts are cumulative across
-        model calls, not the size of the context.
-      </p>
     </>
   );
 };
