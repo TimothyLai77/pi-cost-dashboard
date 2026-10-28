@@ -16,7 +16,7 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 80 tests
+npm test             # 86 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
@@ -109,11 +109,12 @@ dashboard/
 │   ├── cli-verify.js       # database vs files, non-zero exit on mismatch
 │   └── test/               # node:test suites + fixtures
 └── web/
-    ├── index.html
+    ├── index.html          # inline theme script runs before first paint
     └── src/
         ├── main.jsx
         ├── App.jsx
         ├── api.js
+        ├── theme.js        # Auto / Light / Dark, persisted, follows the system in Auto
         ├── styles.css
         └── components/
             ├── SummaryCards.jsx
@@ -178,3 +179,15 @@ rollup against the sum of its own facts.
 - **Day buckets follow the viewer.** `tzOffsetMinutes` shifts the daily buckets; the app's
   Local days toggle sends the browser's offset. Totals are identical either way — only the
   day a session is billed to moves.
+- **Two palettes, one token set.** Light is ink on cool paper, dark is "Ledger slate": the
+  same ledger printed on `#14171a` with the money accent lifted to `#e0873d`. The live
+  accent changes character between them — cyan in light, lilac in dark — because cyan on a
+  dark slate reads as a hyperlink, and lilac keeps "this session is running now" from
+  competing with the amber that carries money. The masthead's 2px rule has its own token
+  (`--rule-accent`): full ink on dark slate is 14.8:1 and reads as a lit line, so dark
+  softens it to silver at 9.4:1. Every dark text pair clears WCAG AA (body 14.8:1,
+  secondary 9.4:1, eyebrows 5.4:1) and the chart fills clear 3:1 against the page.
+  `theme.js` owns the setting (Auto follows the operating system, Light and Dark pin it,
+  choice stored in localStorage), and an inline script in `index.html` applies it before
+  the first paint so a reload in dark mode does not flash light first. Form controls get
+  `color-scheme`, so the selects and checkbox render native to the palette.

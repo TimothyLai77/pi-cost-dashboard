@@ -5,6 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Pi session spend</title>
     <meta name="description" content="Ledger of what your Pi coding-agent sessions cost." />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f5f3" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#14171a" />
+    <script>
+      // Apply the stored theme before the first paint, so a reload in dark mode does not
+      // flash the light palette. It mirrors web/src/theme.js and is written plainly because
+      // it runs before the bundle exists.
+      (function () {
+        try {
+          var saved = localStorage.getItem("pi-cost-theme");
+          var mode =
+            saved === "light" || saved === "dark"
+              ? saved
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          document.documentElement.dataset.theme = mode;
+          document.documentElement.style.colorScheme = mode;
+        } catch (error) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

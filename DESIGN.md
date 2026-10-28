@@ -799,6 +799,34 @@ Dev: `vite` on 5173 proxies `/api` to the server on 4870.
 Prod: `vite build` emits `web/dist`, Express serves it as static files, one
 process, one port.
 
+### Theme: ledger paper and ledger slate
+
+Two palettes on one token set, switched by `<html data-theme>`. Light is the original
+ink-on-cool-paper ledger. Dark is "Ledger slate": same temperature, inverted surface
+(`#14171a` page, `#1b1f23` panels), with the money accent lifted from `#a6541f` to
+`#e0873d` so cost figures stay the loudest numbers on the page. Chosen by contrast math,
+not by eye: every dark text pair clears WCAG AA (body 14.8:1, secondary 9.4:1, eyebrow
+5.4:1) and chart fills clear 3:1 against the page.
+
+Two deliberate differences, not just an inversion:
+
+- **Live is lilac in dark, cyan in light.** Cyan on a dark slate reads as a hyperlink, and
+  lilac carries "this session is running now" without competing with the amber that means
+  money.
+- **The masthead rule has its own token.** `--rule-accent` is ink in light; ink on dark
+  slate is 14.8:1, which reads as a lit line, so dark sets it to silver at 9.4:1. The
+  ledger's rule should be the strongest line on the page, not the brightest.
+
+The setting has three states. Auto follows the operating system and keeps following it
+(the `matchMedia` list is live); Light and Dark pin it. The choice is stored in
+localStorage; blocked storage falls back to Auto for the page load instead of breaking it.
+An inline script in `index.html` applies the stored choice before the first paint, so a
+reload in dark mode never flashes light first — the reason the logic exists in two places
+and why `web/test/theme.test.js` pins `resolveMode` and the storage fallbacks.
+
+Every color in the app already came from tokens, including the chart's strokes and fills,
+so the dark palette is additive: one block of variable overrides, nothing component-level.
+
 ---
 
 ## 11. Repository layout

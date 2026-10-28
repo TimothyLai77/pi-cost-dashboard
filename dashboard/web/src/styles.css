@@ -16,6 +16,10 @@
   --volume: #b3bec8;
   --live: #0e6e8c;
 
+  /* The masthead's 2px ledger rule. Its own token because the color that reads as a
+     confident ink rule on paper becomes a glaring lit line on a dark surface. */
+  --rule-accent: var(--ink);
+
   --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
   --font-numeral: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
@@ -28,6 +32,56 @@
   --space-6: 2.5rem;
 
   --measure: 78rem;
+  color-scheme: light;
+}
+
+/*
+  Ledger slate: the same ledger printed on a cool dark surface. The values are chosen for
+  contrast, not for mood: every text pair clears WCAG AA (body 14.8:1, secondary 9.4:1,
+  eyebrows 5.4:1) and the chart fills clear 3:1 against the page.
+
+  The live accent moves from cyan to lilac in the dark set. Cyan on a dark slate reads as
+  a hyperlink, and lilac carries the same "this session is running right now" meaning
+  without competing with the amber that carries money.
+*/
+[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #14171a;
+  --paper-raised: #1b1f23;
+  --ink: #e8e9e6;
+  --ink-soft: #b6bcc2;
+  --ink-faint: #868e96;
+  --rule: #2b3137;
+  --rule-strong: #3d454d;
+  --money: #e0873d;
+  --money-soft: #2f2115;
+  --volume: #4b5a68;
+  --live: #b98fd9;
+
+  /* Softened to silver. Full ink on dark slate is 14.8:1 and reads as a lit line; the
+     ledger's rule should be the strongest line on the page, not the brightest. */
+  --rule-accent: var(--ink-soft);
+}
+
+/* A theme switch fades rather than snapping. Only colors, and only on the surfaces that
+   visibly change, so nothing animated here interferes with layout. */
+body,
+.panel,
+.summary-card,
+.masthead,
+button,
+select,
+table,
+td,
+th,
+.live-tag,
+.bar-fill,
+.eyebrow,
+p {
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
 * {
@@ -69,7 +123,7 @@ body {
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-4);
-  border-bottom: 2px solid var(--ink);
+  border-bottom: 2px solid var(--rule-accent);
   padding-bottom: var(--space-3);
   margin-bottom: var(--space-5);
 }
@@ -199,12 +253,14 @@ body {
   color: var(--ink-soft);
 }
 
-.range-set {
+.range-set,
+.theme-set {
   display: inline-flex;
   border: 1px solid var(--rule-strong);
 }
 
-.range-set button {
+.range-set button,
+.theme-set button {
   appearance: none;
   border: 0;
   border-right: 1px solid var(--rule-strong);
@@ -216,16 +272,19 @@ body {
   cursor: pointer;
 }
 
-.range-set button:last-child {
+.range-set button:last-child,
+.theme-set button:last-child {
   border-right: 0;
 }
 
-.range-set button:hover {
+.range-set button:hover,
+.theme-set button:hover {
   color: var(--ink);
   background: var(--paper);
 }
 
-.range-set button[aria-pressed="true"] {
+.range-set button[aria-pressed="true"],
+.theme-set button[aria-pressed="true"] {
   background: var(--ink);
   color: var(--paper-raised);
 }

@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useApi } from "./api.js";
+import { PREFERENCES, useTheme } from "./theme.js";
 import { CostChart } from "./components/CostChart.jsx";
 import { ModelBreakdown } from "./components/ModelBreakdown.jsx";
 import { SessionTable } from "./components/SessionTable.jsx";
@@ -22,6 +23,16 @@ const RANGES = [
 
 /** Seconds between automatic refreshes, so a running session's numbers move on their own. */
 const REFRESH_INTERVAL_MS = 30_000;
+
+/** What each theme setting does, in the words shown on the control. @type {Record<string, string>} */
+const THEME_LABELS = { auto: "Auto", light: "Light", dark: "Dark" };
+
+/** Why each theme setting exists, as the hover and accessibility description. */
+const THEME_HINTS = {
+  auto: "Follow the operating system's light or dark appearance, and keep following it",
+  light: "Always use the light ledger palette",
+  dark: "Always use the dark slate palette",
+};
 
 /**
  * @param {{ title: string, children: React.ReactNode, actions?: React.ReactNode }} props
@@ -61,6 +72,7 @@ export const App = () => {
   // UTC is how the data is stored. Bucketing by local day is a display choice, so it
   // defaults off and is applied as an offset the server computes in SQL.
   const [localDays, setLocalDays] = useState(false);
+  const theme = useTheme();
 
   const range = RANGES[rangeIndex];
   const tzOffsetMinutes = localDays ? -new Date().getTimezoneOffset() : 0;
@@ -139,6 +151,19 @@ export const App = () => {
         </div>
         <span className="spacer" />
         <span className="controls">
+          <span className="theme-set" role="group" aria-label="Color theme">
+            {PREFERENCES.map((option) => (
+              <button
+                key={option}
+                type="button"
+                title={THEME_HINTS[option]}
+                aria-pressed={theme.preference === option}
+                onClick={() => theme.choose(option)}
+              >
+                {THEME_LABELS[option]}
+              </button>
+            ))}
+          </span>
           <label title="Bucket days by your browser's timezone instead of UTC">
             <input type="checkbox" checked={localDays} onChange={(event) => setLocalDays(event.target.checked)} />
             Local days
