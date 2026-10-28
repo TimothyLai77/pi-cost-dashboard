@@ -39,9 +39,9 @@
  * starts, and the docs forbid starting sockets, timers, or watchers there.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 
@@ -49,6 +49,7 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
   ExtensionContext,
+  ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -104,35 +105,135 @@ interface Config {
   shutdownTimeoutMs: number;
   token: string | undefined;
   logFile: string;
+  /** Where the endpoint came from, so /pi-cost-settings can say which one is in force. */
+  source: "file" | "env";
 }
 
 /**
- * Read configuration from the environment.
- *
- * An unset PI_COST_URL disables the extension entirely, which is the default state: no
- * network calls, no file writes, nothing to notice.
- *
- * @returns {Config | null} null when reporting is not configured
+ * What `/pi-cost-settings` saves. Every key is optional and an absent key falls through to
+ * the environment. `token: ""` is a saved choice too: it means "no token", so turning one
+ * off does not require deleting the file.
  */
-const readConfig = (): Config | null => {
-  const url = process.env.PI_COST_URL;
+export interface SavedSettings {
+  url?: string;
+  token?: string;
+  auto?: boolean;
+}
+
+/** Default path for saved settings, next to the extension's log file. @type {string} */
+export const SETTINGS_FILE = join(homedir(), ".pi", "agent", "extensions", "pi-cost.json");
+
+/**
+ * Read saved settings.
+ *
+ * A missing file is normal: the extension is unconfigured. A corrupt file is treated the
+ * same way, because a bad manual edit is not a reason to crash a session.
+ *
+ * @param {string} [file]
+ * @returns {SavedSettings | null}
+ */
+export const readSettings = (file: string = SETTINGS_FILE): SavedSettings | null => {
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+
+    const saved: SavedSettings = {};
+    if (typeof raw.url === "string") saved.url = raw.url;
+    if (typeof raw.token === "string") saved.token = raw.token;
+    if (typeof raw.auto === "boolean") saved.auto = raw.auto;
+    return saved;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Merge a patch into saved settings and write the file at mode 0600.
+ *
+ * The mode matters because the file holds the report token. `writeFileSync` only applies a
+ * mode when it creates a file, so `chmodSync` enforces it on rewrites, and the extensions
+ * directory is created when Pi has not made it yet.
+ *
+ * @param {SavedSettings} patch Keys to change
+ * @param {string} [file]
+ * @returns {SavedSettings | null} the saved state, null when the write failed
+ */
+export const writeSettings = (
+  patch: SavedSettings,
+  file: string = SETTINGS_FILE,
+): SavedSettings | null => {
+  const merged = { ...(readSettings(file) ?? {}), ...patch };
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`);
+    chmodSync(file, 0o600);
+    return merged;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Delete saved settings. An absent file counts as success.
+ * @param {string} [file]
+ * @returns {boolean}
+ */
+export const clearSettings = (file: string = SETTINGS_FILE): boolean => {
+  try {
+    rmSync(file, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Decide the settings the extension will use.
+ *
+ * Saved settings win: what `/pi-cost-settings` stored is authoritative, and an environment
+ * variable applies only to a key the file does not set. Tuning values (timeouts, debounce)
+ * stay environment-only; they are not worth a menu entry.
+ *
+ * @param {SavedSettings | null} saved
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {Config | null} null when no endpoint is configured, which disables reporting
+ */
+export const effectiveConfig = (
+  saved: SavedSettings | null,
+  env: Record<string, string | undefined> = process.env,
+): Config | null => {
+  const url = saved?.url || env.PI_COST_URL;
   if (!url) return null;
 
   const number = (name: string, fallback: number): number => {
-    const value = Number(process.env[name]);
+    const value = Number(env[name]);
     return Number.isFinite(value) && value > 0 ? value : fallback;
   };
 
+  const token = saved && "token" in saved ? saved.token : env.PI_COST_TOKEN;
+  const auto = saved && typeof saved.auto === "boolean" ? saved.auto : env.PI_COST_AUTO !== "0";
+
   return {
     url,
-    autoEnabled: process.env.PI_COST_AUTO !== "0",
+    autoEnabled: auto,
     timeoutMs: number("PI_COST_TIMEOUT_MS", 5000),
     minIntervalMs: number("PI_COST_MIN_INTERVAL_MS", 10000),
     shutdownTimeoutMs: number("PI_COST_SHUTDOWN_TIMEOUT_MS", 2000),
-    token: process.env.PI_COST_TOKEN,
+    token: token || undefined,
     logFile: join(homedir(), ".pi", "agent", "extensions", "pi-cost.log"),
+    source: saved?.url ? "file" : "env",
   };
 };
+
+/**
+ * Read configuration: saved settings first, environment as the fallback.
+ *
+ * With no endpoint from either source the extension does nothing at all: no network calls,
+ * no file writes, nothing to notice.
+ *
+ * @returns {Config | null} null when reporting is not configured
+ */
+const readConfig = (): Config | null => effectiveConfig(readSettings());
 
 /**
  * Append one line to the extension log.
@@ -430,11 +531,313 @@ export const postBackground = (config: Config, payload: object): Promise<void> =
     req.end();
   });
 
-export default function (pi: ExtensionAPI) {
-  const config = readConfig();
+/**
+ * The dialog methods the settings command needs, as Pi's UI context provides them.
+ */
+export type SettingsUi = Pick<ExtensionUIContext, "select" | "input" | "confirm" | "notify">;
 
-  // No server configured: register nothing, so an unconfigured Pi session does no work.
-  if (!config) return;
+/** Actions offered by `/pi-cost-settings`, in menu order. @type {{key:string,label:string}[]} */
+export const SETTINGS_ACTIONS = [
+  { key: "show", label: "Show current settings" },
+  { key: "url", label: "Set endpoint URL" },
+  { key: "token", label: "Set report token" },
+  { key: "auto", label: "Toggle automatic reporting" },
+  { key: "test", label: "Test connection" },
+  { key: "clear", label: "Clear saved settings" },
+];
+
+/**
+ * Map command arguments to an action, so `/pi-cost-settings url` skips the menu.
+ * @param {string} args Everything typed after the command name
+ * @returns {{ key: string, label: string } | null} null when a menu should open
+ */
+export const resolveSettingsAction = (args: string): { key: string; label: string } | null => {
+  const word = (args ?? "").trim().split(/\s+/)[0]?.toLowerCase();
+  if (!word) return null;
+  return SETTINGS_ACTIONS.find((action) => action.key === word) ?? null;
+};
+
+/**
+ * Show a secret without printing it. Settings output gets read over shoulders and pasted
+ * into chats, so the ends are the most that is ever displayed.
+ *
+ * @param {string} [secret]
+ * @returns {string}
+ */
+export const maskSecret = (secret?: string): string => {
+  if (!secret) return "none";
+  if (secret.length <= 8) return `•••• (${secret.length} chars)`;
+  return `${secret.slice(0, 4)}…${secret.slice(-4)} (${secret.length} chars)`;
+};
+
+/**
+ * Check a typed endpoint before saving it.
+ * @param {string} raw What the user typed
+ * @returns {{ ok: boolean, url?: string, message?: string }}
+ */
+export const validateEndpoint = (raw: string): { ok: boolean; url?: string; message?: string } => {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return { ok: false, message: "An endpoint URL is required." };
+
+  let target: URL;
+  try {
+    target = new URL(trimmed);
+  } catch {
+    return { ok: false, message: `That is not a URL: ${trimmed}` };
+  }
+
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
+    return { ok: false, message: `Use http:// or https:// (got ${target.protocol})` };
+  }
+  if (!target.hostname) return { ok: false, message: "The URL has no host name." };
+  if (target.pathname === "/" || target.pathname === "") {
+    return { ok: false, message: "Point at the ingest endpoint, for example https://host/api/ingest" };
+  }
+  if (target.pathname !== "/api/ingest") {
+    return {
+      ok: true,
+      url: target.toString(),
+      message: `Saved, though the path is ${target.pathname}, not /api/ingest.`,
+    };
+  }
+  return { ok: true, url: target.toString() };
+};
+
+/**
+ * Reach the server the way the reports do, without reporting anything.
+ *
+ * `GET /api/health` proves the host, port, TLS chain, and proxy. A `POST` of an empty body
+ * to the ingest endpoint proves the token: 401 means the secret is wrong, 400 means the
+ * request cleared the token check and the validator rejected the empty body. A test
+ * therefore writes nothing to the database.
+ *
+ * @param {Config} config
+ * @returns {Promise<{ ok: boolean, authOk: boolean, lines: string[] }>}
+ */
+export const probeConnection = async (
+  config: Config,
+): Promise<{ ok: boolean; authOk: boolean; lines: string[] }> => {
+  const target = new URL(config.url);
+  const origin = `${target.protocol}//${target.host}`;
+  const lines: string[] = [];
+
+  let reachable = false;
+  try {
+    const health = await fetch(new URL("/api/health", origin).toString(), {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(config.timeoutMs),
+    });
+    const body = await health.json().catch(() => ({})) as Record<string, any>;
+    if (health.ok) {
+      reachable = true;
+      lines.push(`Reachable · ${body.sessionCount ?? 0} sessions, ${body.costUsd ?? "$0.00"} recorded`);
+    } else {
+      lines.push(`Server answered HTTP ${health.status}`);
+    }
+  } catch (error) {
+    return { ok: false, authOk: false, lines: [`Not reachable: ${(error as Error).message}`] };
+  }
+
+  let authOk = false;
+  try {
+    const probe = await fetch(config.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(config.token ? { "x-pi-cost-token": config.token } : {}),
+      },
+      body: "{}",
+      signal: AbortSignal.timeout(config.timeoutMs),
+    });
+    if (probe.status === 401) {
+      lines.push(config.token ? "Token rejected (401)" : "Server requires a token and none is set");
+    } else if (probe.status === 400) {
+      // The empty body reached the validator, which is past the token check.
+      authOk = true;
+      lines.push(config.token ? "Token accepted" : "Writes open (no token needed)");
+    } else {
+      lines.push(`Unexpected answer: HTTP ${probe.status}`);
+    }
+  } catch (error) {
+    lines.push(`Token check failed: ${(error as Error).message}`);
+  }
+
+  return { ok: reachable, authOk, lines };
+};
+
+/**
+ * One action of the settings flow, driven through Pi's dialog UI.
+ *
+ * @param {string} key One of the SETTINGS_ACTIONS keys
+ * @param {{ ui: SettingsUi, refresh: () => void, current: () => Config | null, settingsFile?: string }} deps
+ * @returns {Promise<void>}
+ */
+export const runSettingsAction = async (
+  key: string,
+  deps: {
+    ui: SettingsUi;
+    refresh: () => void;
+    current: () => Config | null;
+    settingsFile?: string;
+  },
+): Promise<void> => {
+  const { ui, refresh, current } = deps;
+  const file = deps.settingsFile ?? SETTINGS_FILE;
+  const config = current();
+
+  if (key === "show") {
+    if (!config) {
+      ui.notify("Pi cost reporting is off: no endpoint saved. Set PI_COST_URL, or choose Set endpoint URL.", "info");
+      return;
+    }
+    ui.notify(
+      [
+        `Endpoint: ${config.url}`,
+        `Token: ${maskSecret(config.token)}`,
+        `Automatic reporting: ${config.autoEnabled ? "on" : "off"} (settled reports run in interactive sessions only)`,
+        `Source: ${config.source === "file" ? "saved settings" : "environment variables"}`,
+        `File: ${file}`,
+      ].join("\n"),
+      "info",
+    );
+    return;
+  }
+
+  if (key === "url") {
+    const typed = await ui.input("Pi cost endpoint", "https://host.example/api/ingest");
+    if (typed === undefined) {
+      ui.notify("Endpoint unchanged.", "info");
+      return;
+    }
+    const checked = validateEndpoint(typed);
+    if (!checked.ok || !checked.url) {
+      ui.notify(checked.message ?? "Invalid endpoint.", "error");
+      return;
+    }
+    const saved = writeSettings({ url: checked.url }, file);
+    refresh();
+    if (!saved) {
+      ui.notify(`Could not write ${file}`, "error");
+      return;
+    }
+    ui.notify(`${checked.message ? `${checked.message}\n` : ""}Endpoint saved: ${checked.url}`, "info");
+    return;
+  }
+
+  if (key === "token") {
+    const typed = await ui.input("Pi cost report token", "empty sends no token");
+    if (typed === undefined) {
+      ui.notify("Token unchanged.", "info");
+      return;
+    }
+    const saved = writeSettings({ token: typed.trim() }, file);
+    refresh();
+    if (!saved) {
+      ui.notify(`Could not write ${file}`, "error");
+      return;
+    }
+    ui.notify(saved.token ? `Token saved: ${maskSecret(saved.token)}` : "Token cleared, reports send none.", "info");
+    return;
+  }
+
+  if (key === "auto") {
+    // Without an endpoint there is nothing to report automatically, and saving a toggle
+    // would leave a setting behind that only changes behaviour once a server exists.
+    if (!config) {
+      ui.notify("No endpoint configured, so there is nothing to report automatically. Set one first.", "info");
+      return;
+    }
+    const next = !config.autoEnabled;
+    const saved = writeSettings({ auto: next }, file);
+    refresh();
+    if (!saved) {
+      ui.notify(`Could not write ${file}`, "error");
+      return;
+    }
+    ui.notify(
+      next
+        ? "Automatic reporting on: reports go out when the agent settles."
+        : "Automatic reporting off. /pi-cost still reports when you ask.",
+      "info",
+    );
+    return;
+  }
+
+  if (key === "test") {
+    if (!config) {
+      ui.notify("No endpoint configured, so there is nothing to test.", "info");
+      return;
+    }
+    const result = await probeConnection(config);
+    // Reachable with a bad secret is worth a distinct signal: the address is fine and the
+    // token is the thing to fix.
+    const level = result.ok ? (result.authOk ? "info" : "warning") : "error";
+    ui.notify(result.lines.join("\n"), level);
+    return;
+  }
+
+  if (key === "clear") {
+    const sure = await ui.confirm(
+      "Clear saved settings",
+      "Deletes the saved endpoint, token, and auto setting. Reporting stops unless the environment sets them.",
+    );
+    if (!sure) {
+      ui.notify("Nothing cleared.", "info");
+      return;
+    }
+    const cleared = clearSettings(file);
+    refresh();
+    ui.notify(cleared ? "Saved settings deleted." : `Could not delete ${file}`, cleared ? "info" : "error");
+    return;
+  }
+
+  ui.notify(`Unknown setting action: ${key}`, "error");
+};
+
+export default function (pi: ExtensionAPI) {
+  // Settings can change while Pi runs. /pi-cost-settings writes the settings file and every
+  // report reads the current value, so saving an endpoint in a session that started
+  // unconfigured begins reporting immediately -- no Pi restart.
+  let config: Config | null = readConfig();
+  const refreshConfig = (): void => {
+    config = readConfig();
+  };
+
+  // Registered unconditionally: this command is how the endpoint gets set in the first
+  // place, so it has to exist in a session that starts with no configuration.
+  pi.registerCommand("pi-cost-settings", {
+    description: "Set the pi-cost endpoint, report token, and automatic reporting",
+    getArgumentCompletions: (prefix: string) => {
+      const keys = SETTINGS_ACTIONS.map((action) => action.key);
+      const matches = keys.filter((key) => key.startsWith(prefix));
+      return matches.length > 0 ? matches.map((key) => ({ value: key, label: key })) : null;
+    },
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      // Dialogs need a UI. In print, JSON, and RPC-without-dialogs runs this does nothing,
+      // and whatever is already saved keeps being used for reporting.
+      if (!ctx.hasUI) return;
+
+      const picked =
+        resolveSettingsAction(args) ??
+        (await ctx.ui.select(
+          "Pi cost settings",
+          SETTINGS_ACTIONS.map((action) => action.label),
+        ));
+      if (!picked) return;
+
+      // A subcommand yields an action object; the menu returns the chosen label.
+      const key =
+        typeof picked === "string"
+          ? (SETTINGS_ACTIONS.find((action) => action.label === picked)?.key ?? picked)
+          : picked.key;
+      await runSettingsAction(key, {
+        ui: ctx.ui,
+        refresh: refreshConfig,
+        current: () => config,
+        settingsFile: SETTINGS_FILE,
+      });
+    },
+  });
 
   let disabledForSession = false;
   let lastReportMs = 0;
@@ -442,15 +845,20 @@ export default function (pi: ExtensionAPI) {
 
   /**
    * Send a payload. Resolves with the parsed response, rejects on transport failure.
+   * @param {Config} active Configuration to send under
    * @param {object} payload
    * @param {number} timeoutMs
    */
-  const post = async (payload: object, timeoutMs: number): Promise<Record<string, any>> => {
-    const response = await fetch(config.url, {
+  const post = async (
+    active: Config,
+    payload: object,
+    timeoutMs: number,
+  ): Promise<Record<string, any>> => {
+    const response = await fetch(active.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        ...(config.token ? { "x-pi-cost-token": config.token } : {}),
+        ...(active.token ? { "x-pi-cost-token": active.token } : {}),
       },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(timeoutMs),
@@ -470,6 +878,12 @@ export default function (pi: ExtensionAPI) {
       return matches.length > 0 ? matches.map((name) => ({ value: name, label: name })) : null;
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const active = config;
+      if (!active) {
+        ctx.ui.notify("No pi-cost endpoint configured. Run /pi-cost-settings to set one.", "info");
+        return;
+      }
+
       const subcommand = args.trim().split(/\s+/)[0] ?? "report";
 
       if (subcommand === "off") {
@@ -487,10 +901,10 @@ export default function (pi: ExtensionAPI) {
       if (subcommand === "total" || subcommand === "today" || subcommand === "week") {
         const windowDays = subcommand === "today" ? 1 : subcommand === "week" ? 7 : 3650;
         try {
-          const summaryUrl = new URL("/api/summary", config.url).toString();
+          const summaryUrl = new URL("/api/summary", active.url).toString();
           const response = await fetch(`${summaryUrl}?days=${windowDays}`, {
             headers: { accept: "application/json" },
-            signal: AbortSignal.timeout(config.timeoutMs),
+            signal: AbortSignal.timeout(active.timeoutMs),
           });
           const body = await response.json() as Record<string, any>;
           if (!response.ok) throw new Error(`${response.status}: ${body.error ?? response.statusText}`);
@@ -515,7 +929,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       try {
-        const body = await post(buildPayload(snapshot, "command"), config.timeoutMs);
+        const body = await post(active, buildPayload(snapshot, "command"), active.timeoutMs);
         ctx.ui.notify(
           `Reported ${formatUsd(snapshot.costMicros)} over ${snapshot.totalTokens.toLocaleString("en-US")} tokens${
             body.applied === false ? " (server kept a newer snapshot)" : ""
@@ -523,18 +937,19 @@ export default function (pi: ExtensionAPI) {
           "info",
         );
       } catch (error) {
-        logLine(config, `command report failed: ${(error as Error).message}`);
+        logLine(active, `command report failed: ${(error as Error).message}`);
         ctx.ui.notify(`Report failed: ${(error as Error).message}`, "error");
       }
     },
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    if (!config.autoEnabled || disabledForSession) return;
+    const active = config;
+    if (!active || !active.autoEnabled || disabledForSession) return;
     // Automatic reports run in interactive sessions only. A print-mode run has no prompts
     // to keep fast, and the scanner picks its file up seconds later.
     if (ctx.mode !== "tui") return;
-    if (Date.now() - lastReportMs < config.minIntervalMs) return;
+    if (Date.now() - lastReportMs < active.minIntervalMs) return;
     if (inFlight) return; // coalesce: at most one request outstanding
 
     let payload: object;
@@ -545,7 +960,7 @@ export default function (pi: ExtensionAPI) {
       if (snapshot.costMicros === 0 && snapshot.totalTokens === 0) return;
       payload = buildPayload(snapshot, "agent_settled");
     } catch (error) {
-      logLine(config, `snapshot failed: ${(error as Error).message}`);
+      logLine(active, `snapshot failed: ${(error as Error).message}`);
       return;
     }
 
@@ -556,13 +971,14 @@ export default function (pi: ExtensionAPI) {
     // postBackground also unrefs its socket, so the request is not a reason for Pi to stay
     // alive, and it resolves rather than rejecting: an unawaited rejection would be an
     // unhandled rejection, and this process is Pi's, not ours.
-    inFlight = postBackground(config, payload).then(() => {
+    inFlight = postBackground(active, payload).then(() => {
       inFlight = null;
     });
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    if (!config.autoEnabled || disabledForSession) return;
+    const active = config;
+    if (!active || !active.autoEnabled || disabledForSession) return;
 
     try {
       const snapshot = buildSnapshot(ctx.sessionManager);
@@ -572,9 +988,9 @@ export default function (pi: ExtensionAPI) {
       // Awaiting here is required: process exit kills in-flight requests. Nothing is
       // blocked, because there are no prompts left after shutdown. The timeout is short
       // so quitting Pi stays responsive when the server is down.
-      await post(buildPayload(snapshot, "shutdown"), config.shutdownTimeoutMs);
+      await post(active, buildPayload(snapshot, "shutdown"), active.shutdownTimeoutMs);
     } catch (error) {
-      logLine(config, `shutdown report failed: ${(error as Error).message}`);
+      logLine(active, `shutdown report failed: ${(error as Error).message}`);
     }
   });
 }

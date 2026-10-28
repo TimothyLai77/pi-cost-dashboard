@@ -16,7 +16,7 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 90 tests
+npm test             # 107 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
@@ -26,12 +26,13 @@ without a dependency; the server module itself never reads a file, which keeps t
 suite independent of whoever runs it.
 
 To watch a live session locally, install the extension
-([../pi-extension/README.md](../pi-extension/README.md)) and point it at your own run:
+([../pi-extension/README.md](../pi-extension/README.md)) and configure it from inside Pi:
 
 ```bash
 ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
-export PI_COST_URL=http://127.0.0.1:4870/api/ingest
-export PI_COST_TOKEN=$(grep PI_COST_TOKEN .env | cut -d= -f2)   # only if one is set
+# then in Pi:  /pi-cost-settings   → Set endpoint URL → http://127.0.0.1:4870/api/ingest
+#                               → Set report token (copy it from .env if one is set)
+#                               → Test connection
 ```
 
 ## Deploy with Docker (LAN host)
@@ -70,12 +71,9 @@ volumes:
 #   PI_COST_SESSIONS_DIR: /data/pi-sessions
 ```
 
-On each Pi machine, point the extension at the server and give it the same secret:
-
-```bash
-export PI_COST_URL=http://your-dashboard-host:4870/api/ingest   # name or LAN IP
-export PI_COST_TOKEN=<the same secret>
-```
+On each Pi machine, symlink the extension and configure it with `/pi-cost-settings` —
+endpoint URL, then report token, then Test connection. The saved file is authoritative; a
+one-off `PI_COST_URL=… pi` still works for keys the file does not set.
 
 `docker compose down` keeps the volume; `docker compose down -v` deletes the database.
 The image has a healthcheck that polls `/api/health` every 30 seconds.

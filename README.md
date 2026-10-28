@@ -33,12 +33,8 @@ npm run migrate && npm run backfill   # build the database from your session his
 npm run build && npm start            # app + API on http://127.0.0.1:4870
 ```
 
-Then, for live sessions:
-
-```bash
-ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
-export PI_COST_URL=http://127.0.0.1:4870/api/ingest
-```
+Then, inside Pi, run `/pi-cost-settings` → Set endpoint URL → Set report token. That is the
+whole setup; the extension writes its own config file and starts reporting immediately.
 
 ## Deployment
 
@@ -52,12 +48,19 @@ cp .env.example .env          # set PI_COST_TOKEN and PI_COST_BIND=0.0.0.0:4870:
 docker compose up -d --build
 ```
 
-On the Pi machines:
+On each Pi machine, symlink the extension and set it up from inside Pi:
 
 ```bash
-export PI_COST_URL=http://your-dashboard-host:4870/api/ingest
-export PI_COST_TOKEN=<the same secret>
+ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
+# then in Pi:
+#   /pi-cost-settings url    https://your-dashboard-host/api/ingest
+#   /pi-cost-settings token  <the server's PI_COST_TOKEN>
+#   /pi-cost-settings test
 ```
+
+`/pi-cost-settings test` is the fastest way to find a broken deployment: it reports
+reachability and the token verdict (401 = bad secret, 400 = good secret, nothing written).
+Environment variables still work and apply to any key the saved file does not set.
 
 That deployment is push-fed: the container scans nothing (`PI_COST_SESSIONS_DIR` points at
 an empty directory inside the image), and every number arrives over `POST /api/ingest`.

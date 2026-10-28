@@ -916,7 +916,7 @@ pair for a synchronous, single-file DB.
 
 | Setting | Env var | Default |
 |---|---|---|
-| Server URL the extension posts to | `PI_COST_URL` | unset ⇒ extension is inert |
+| Server URL the extension posts to | `PI_COST_URL` | saved file wins; unset in both ⇒ extension is inert |
 | Disable automatic reporting | `PI_COST_AUTO=0` | auto enabled when URL is set |
 | Request timeout, settled | `PI_COST_TIMEOUT_MS` | 5000 |
 | Report debounce floor | `PI_COST_MIN_INTERVAL_MS` | 10000 |
@@ -968,6 +968,33 @@ version cannot quietly start shipping transcript data into the database.
 - If a session file is deleted after being ingested, the row is removed on the
   next scan (§7). Retention is therefore "as long as the files exist," which
   keeps the dashboard and Pi's own session list consistent.
+
+### Saved settings (built after the LAN deployment made env-only setup painful)
+
+`/pi-cost-settings` writes `~/.pi/agent/extensions/pi-cost.json` at mode 0600 with
+`url`, `token`, and `auto`. Rules:
+
+- **Saved wins, key by key.** A file value beats the environment; an env var applies only
+  to a key the file omits, so `PI_COST_URL=… pi` is still a clean one-off override.
+- **`token: ""` is a saved choice**, meaning "no token". Turning a secret off does not
+  require deleting the file.
+- **A corrupt or missing file reads as nothing saved.** A bad manual edit must not crash a
+  session.
+- **Reports re-read the file**, so saving an endpoint mid-session starts reporting with no
+  Pi restart. That is why the report handlers take the current config at event time.
+- **Non-interactive runs ignore the command.** Print, JSON, and RPC-without-dialogs modes
+  have no dialogs; the command returns without touching anything, and saved settings keep
+  driving reports.
+- **Tokens are masked in output** (`dda4…aaaf (32 chars)`) — settings text gets read over
+  shoulders and pasted into chats.
+- **Test connection is non-destructive:** `GET /api/health` for reachability (host, port,
+  TLS chain, proxy), then an empty-body `POST` to the ingest endpoint for the token. 401 is
+  a bad secret, 400 means the request cleared the token check and the validator rejected the
+  body, so a diagnostic writes nothing.
+
+The menu has six actions; the same keys work as subcommands (`/pi-cost-settings url`).
+Validation before saving rejects non-http(s) schemes, missing hosts, and a bare host with no
+path, and saves an unusual path with a note that it is not `/api/ingest`.
 
 ### Deployment (decided: Docker, on a LAN host)
 

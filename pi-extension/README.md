@@ -7,20 +7,32 @@ measurements in [../DESIGN.md](../DESIGN.md) §9.
 
 ```bash
 ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
-export PI_COST_URL=https://pi-cost.example.net/api/ingest   # https or http, host or IP
-export PI_COST_TOKEN=<the server's PI_COST_TOKEN>              # when the server sets one
 ```
 
-Pi does not read the dashboard's `.env`. These variables have to be in the environment Pi
-itself runs under — a shell profile, a systemd user environment — and Pi has to be started
-from a shell that has them (re-source the profile, or restart the terminal) before any
-report is sent. With `PI_COST_URL` unset the extension registers nothing at all and leaves
-no trace, which is exactly what a dashboard full of zeros looks like.
+Then, inside Pi, run `/pi-cost-settings` → Set endpoint URL → Set report token. Nothing
+else to install: Pi writes its own config, and reports start immediately.
 
-`PI_COST_URL` accepts `http:` and `https:`. The fire-and-forget path picks `node:http` or
-`node:https` by protocol: the plain module cannot speak TLS, so an https URL through it
-would send plaintext to port 443 and fail quietly. Both paths unref their socket, which is
-why neither is built on `fetch`.
+Develop against one session without installing: `pi --extension ./pi-cost.ts`
+
+### Settings file
+
+`/pi-cost-settings` saves to `~/.pi/agent/extensions/pi-cost.json` at mode 0600:
+
+```json
+{ "url": "https://pi-cost.example.net/api/ingest", "token": "…", "auto": true }
+```
+
+Saved settings win. An environment variable applies only to a key the file does not set, so
+a saved setup works in every shell and `PI_COST_URL=… pi` is still a clean one-off
+override against a test server. Tuning values (`PI_COST_TIMEOUT_MS`,
+`PI_COST_MIN_INTERVAL_MS`, `PI_COST_SHUTDOWN_TIMEOUT_MS`, `PI_COST_AUTO`) stay
+environment-only; they are not worth a menu entry.
+
+With no endpoint from the file or the environment, the extension does nothing at all: no
+network calls, no file writes, nothing to notice. `PI_COST_URL` accepts `http:` and
+`https:`; the fire-and-forget path picks `node:http` or `node:https` by protocol, because
+the plain module cannot speak TLS, and both variants unref their socket — which is why
+neither is built on `fetch`.
 
 Develop against one session without installing: `pi --extension ./pi-cost.ts`
 
@@ -37,6 +49,17 @@ logged to `~/.pi/agent/extensions/pi-cost.log`.
 | `/pi-cost total` | All-time spend from the server |
 | `/pi-cost today` / `/pi-cost week` | Server totals for a window |
 | `/pi-cost off` / `/pi-cost on` | Stop / resume automatic reporting for this session |
+| `/pi-cost-settings` | Menu: show, endpoint URL, report token, auto on/off, test connection, clear |
+| `/pi-cost-settings url\|token\|auto\|test\|show\|clear` | Skip the menu, go straight there |
+
+The settings menu works only where Pi has dialogs. In print, JSON, and RPC-without-dialogs
+runs it does nothing, and whatever is already saved keeps being used for reporting.
+
+`Test connection` is non-destructive: `GET /api/health` proves the host, port, TLS chain,
+and proxy, then an empty-body `POST` to the ingest endpoint proves the token — 401 means
+the secret is wrong, 400 means the request cleared the token check and the validator
+rejected the body, so nothing is written. Tokens are masked in every listing
+(`dda4…aaaf (32 chars)`).
 
 ## Reporting
 
