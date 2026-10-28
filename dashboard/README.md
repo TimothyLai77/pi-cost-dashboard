@@ -16,7 +16,7 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 86 tests
+npm test             # 90 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
@@ -83,6 +83,18 @@ The image has a healthcheck that polls `/api/health` every 30 seconds.
 The transport is plain HTTP, which is fine on a trusted LAN: the token rides in a header,
 so anyone who can sniff the wire can read it. If this ever leaves a trusted network, put
 it behind a TLS proxy and keep the port off the public interface.
+
+### If you publish it behind a domain
+
+Putting the dashboard on a hostname with a TLS proxy is a reasonable way to reach it, and
+the extension speaks `https:` fine. Two consequences of publishing it beyond a LAN:
+
+- **Open reads become public reads.** The API is open by design, so anyone who can name the
+  host can read your spend, project paths, session ids, and model names. Restrict the path
+  at the proxy (IP allowlist, basic auth, a wire guard), or gate reads in the app.
+- **The port behind it does not need to be published to all interfaces.** Keep
+  `PI_COST_BIND=127.0.0.1:4870:4870` and let the proxy — which runs on the same host — talk
+  to loopback. Publishing `0.0.0.0` is only for direct LAN access.
 
 ## Layout
 

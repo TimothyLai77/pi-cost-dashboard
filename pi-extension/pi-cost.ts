@@ -42,7 +42,8 @@
 import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { request } from "node:http";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 
 import type {
   ExtensionAPI,
@@ -359,17 +360,32 @@ export const buildPayload = (snapshot: SessionSnapshot, reportedBy: "command" | 
 });
 
 /**
+ * The request function that matches a URL's protocol.
+ *
+ * `node:http` cannot speak TLS, so pointing `PI_COST_URL` at an https server through it
+ * would send plaintext to port 443 and fail. The https module handles the handshake and
+ * exposes the same socket, so the unref that keeps Pi's exit fast works for both.
+ *
+ * @param {string} protocol "http:" or "https:"
+ * @returns {typeof httpRequest}
+ */
+export const requestForProtocol = (protocol: string) =>
+  protocol === "https:" ? httpsRequest : httpRequest;
+
+/**
  * Send a snapshot without blocking and without keeping the process alive.
  *
- * Uses node:http rather than fetch because the socket can be unref'd. Without that, an
- * outstanding request holds the event loop open and a non-interactive Pi run waits for the
- * server's answer before it can exit.
+ * Uses node:http / node:https rather than fetch because the socket can be unref'd. Without
+ * that, an outstanding request holds the event loop open and a non-interactive Pi run
+ * waits for the server's answer before it can exit.
+ *
+ * Exported so a test can drive it against a real local server, plain and TLS.
  *
  * @param {Config} config
  * @param {object} payload
  * @returns {Promise<void>} Resolves when the request finishes, never rejects
  */
-const postBackground = (config: Config, payload: object): Promise<void> =>
+export const postBackground = (config: Config, payload: object): Promise<void> =>
   new Promise((resolve) => {
     let target: URL;
     try {
@@ -380,7 +396,7 @@ const postBackground = (config: Config, payload: object): Promise<void> =>
     }
 
     const body = JSON.stringify(payload);
-    const req = request(
+    const req = requestForProtocol(target.protocol)(
       {
         protocol: target.protocol,
         hostname: target.hostname,

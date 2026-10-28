@@ -677,10 +677,19 @@ reading:
    with none — the 2 s cap did not save it, because the cap applies to the request that
    is awaited, and the unfinished background request is what kept the process alive.
 
-Both are handled: the background request uses `node:http` so its socket can be `unref()`'d,
-which is not available through `fetch`; and automatic reports run only when
-`ctx.mode === "tui"`. A print-mode run has no prompts to protect, and the scanner reads
-its session file from disk seconds later, so skipping the report loses nothing.
+Both are handled: the background request is built with `node:http` (or `node:https` for an
+`https:` URL) so its socket can be `unref()`'d, which is not available through `fetch`; and
+automatic reports run only when `ctx.mode === "tui"`. A print-mode run has no prompts to
+protect, and in a deployment that scans session files the scanner reads its file seconds
+later, so skipping the report loses nothing.
+
+The protocol split is not cosmetic. The first version built every background request with
+`node:http`, which cannot speak TLS: pointing `PI_COST_URL` at an https server sent
+plaintext to port 443 and the report failed quietly, visible only in the extension log.
+Since the awaited shutdown report uses `fetch` and does support TLS, that failure looks
+like "some reports arrive". `requestForProtocol()` selects the module from the URL, and
+`extension.test.js` drives `postBackground` against a real TLS server using a throwaway
+self-signed localhost certificate, so the handshake is exercised rather than assumed.
 
 ```ts
 pi.on("agent_settled", async (_event, ctx) => {

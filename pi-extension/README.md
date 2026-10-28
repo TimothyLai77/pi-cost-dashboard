@@ -7,9 +7,20 @@ measurements in [../DESIGN.md](../DESIGN.md) §9.
 
 ```bash
 ln -s ~/git/pi-cost-dashboard/pi-extension/pi-cost.ts ~/.pi/agent/extensions/pi-cost.ts
-export PI_COST_URL=http://your-dashboard-host:4870/api/ingest   # LAN host, name or IP
+export PI_COST_URL=https://pi-cost.example.net/api/ingest   # https or http, host or IP
 export PI_COST_TOKEN=<the server's PI_COST_TOKEN>              # when the server sets one
 ```
+
+Pi does not read the dashboard's `.env`. These variables have to be in the environment Pi
+itself runs under — a shell profile, a systemd user environment — and Pi has to be started
+from a shell that has them (re-source the profile, or restart the terminal) before any
+report is sent. With `PI_COST_URL` unset the extension registers nothing at all and leaves
+no trace, which is exactly what a dashboard full of zeros looks like.
+
+`PI_COST_URL` accepts `http:` and `https:`. The fire-and-forget path picks `node:http` or
+`node:https` by protocol: the plain module cannot speak TLS, so an https URL through it
+would send plaintext to port 443 and fail quietly. Both paths unref their socket, which is
+why neither is built on `fetch`.
 
 Develop against one session without installing: `pi --extension ./pi-cost.ts`
 
