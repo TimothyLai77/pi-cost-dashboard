@@ -6,6 +6,10 @@
  * plain cost line would draw that as a flat zero and read as a gap in the data, so token
  * volume is drawn as a quiet area behind the cost bars. Cost is the loud layer, volume is
  * the context, and a day with real usage and no bill is legible as what it is.
+ *
+ * The chart prints no caption under itself. What the token figures include is stated in the
+ * summary strip footer and in the legend, which is where a reader looks before parsing a
+ * paragraph under the axis.
  */
 
 import {
@@ -57,7 +61,6 @@ const DayTooltip = ({ active, payload }) => {
  */
 export const CostChart = ({ points, range, onSelectDay }) => {
   const busiestDay = points.reduce((max, point) => Math.max(max, point.totalTokens), 0);
-  const zeroCostDays = points.filter((point) => point.costMicros === 0 && point.totalTokens > 0).length;
 
   return (
     <>
@@ -137,22 +140,6 @@ export const CostChart = ({ points, range, onSelectDay }) => {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-
-      <p className="chart-note">
-        {zeroCostDays > 0 ? (
-          <>
-            <span className="numeral">{zeroCostDays}</span> day{zeroCostDays === 1 ? "" : "s"} in this range used
-            the agent with no charge — the models have no price in the catalog, so the grey band is the activity.
-            Days with no band at all are days with no sessions.
-          </>
-        ) : (
-          <>
-            Every day in this range billed something. The grey band shows token volume for scale.
-            Token counts are cumulative across model calls — each call re-reads the context it
-            already has — so they measure work done, not the size of a conversation.
-          </>
-        )}
-      </p>
     </>
   );
 };
