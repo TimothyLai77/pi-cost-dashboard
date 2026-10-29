@@ -7,6 +7,11 @@
  * volume is drawn as a quiet area behind the cost bars. Cost is the loud layer, volume is
  * the context, and a day with real usage and no bill is legible as what it is.
  *
+ * Each cost bar is stacked in the four parts the provider billed it in, so a bar answers
+ * "what was that day's money" as well as "how much". Warm amber segments are completion and
+ * prompt tokens, cool steel segments are cache. The bar carries hairline gaps between
+ * segments, so the stack reads as ledger bands rather than a blended gradient.
+ *
  * The chart prints no caption under itself. What the token figures include is stated in the
  * summary strip footer and in the legend, which is where a reader looks before parsing a
  * paragraph under the axis.
@@ -24,22 +29,26 @@ import {
 } from "recharts";
 
 import { formatCost, formatTokens } from "../api.js";
+import { COST_PARTS, moneyBreakdown, partDollars } from "./costParts.js";
 
-const MONEY = "var(--money)";
 const VOLUME = "var(--volume)";
 
 /**
- * Tooltip over one day: spend, volume, and how many sessions produced it.
+ * Tooltip over one day: spend, what the spend was made of, volume, and who produced it.
  * @param {{ active?: boolean, payload?: any[] }} props
  * @returns {JSX.Element | null}
  */
 const DayTooltip = ({ active, payload }) => {
-  if (!active || payload?.length !== 1) return null;
-  const point = payload[0].payload;
+  // A stacked bar contributes one payload entry per part, so the guard is "is there a
+  // datum", not "is there exactly one series".
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+  const money = moneyBreakdown(point);
   return (
     <div className="state" style={{ border: "1px solid var(--rule-strong)", background: "var(--paper-raised)" }}>
       <span className="eyebrow">{point.day}</span>
       <div className="numeral">{formatCost(point.costMicros, point.costMicros > 0 && point.costMicros < 10000 ? 4 : 2)}</div>
+      {money ? <div className="numeral tooltip-money">{money}</div> : null}
       <div className="numeral" style={{ color: "var(--ink-faint)" }}>
         {formatTokens(point.totalTokens)} tokens · {point.sessions} session{point.sessions === 1 ? "" : "s"} ·{" "}
         {point.events} call{point.events === 1 ? "" : "s"}
@@ -65,10 +74,12 @@ export const CostChart = ({ points, range, onSelectDay }) => {
   return (
     <>
       <div className="chart-legend">
-        <span>
-          <span className="swatch swatch-money" />
-          Spend
-        </span>
+        {COST_PARTS.map((part) => (
+          <span key={part.key}>
+            <span className={`swatch ${part.swatch}`} />
+            {part.label}
+          </span>
+        ))}
         <span>
           <span className="swatch swatch-volume" />
           <span title="input + output + cache reads + cache writes. Cache reads are counted again on every model call, so this bar tracks model calls x context size, not spend.">
@@ -119,24 +130,32 @@ export const CostChart = ({ points, range, onSelectDay }) => {
               fillOpacity={0.35}
               isAnimationActive={false}
             />
-            <Bar
-              yAxisId="cost"
-              dataKey={(point) => Number((point.costMicros / 1e6).toFixed(4))}
-              name="costUsd"
-              fill={MONEY}
-              maxBarSize={14}
-              isAnimationActive={false}
-              className={onSelectDay ? "bar-clickable" : undefined}
-              onClick={
-                onSelectDay
-                  ? (entry) => {
-                      // Recharts hands back the datum it drew, which carries the day label.
-                      const day = entry?.payload?.day ?? entry?.day;
-                      if (day) onSelectDay(day);
-                    }
-                  : undefined
-              }
-            />
+            {COST_PARTS.map((part) => (
+              <Bar
+                key={part.key}
+                yAxisId="cost"
+                stackId="cost"
+                dataKey={(point) => partDollars(point, part.key)}
+                name={part.key}
+                fill={part.color}
+                // Hairline gaps, in the panel's own colour: the stack reads as ledger bands,
+                // which keeps segments legible without pushing their fills apart in hue.
+                stroke="var(--paper-raised)"
+                strokeWidth={1}
+                maxBarSize={14}
+                isAnimationActive={false}
+                className={onSelectDay ? "bar-clickable" : undefined}
+                onClick={
+                  onSelectDay
+                    ? (entry) => {
+                        // Recharts hands back the datum it drew, which carries the day label.
+                        const day = entry?.payload?.day ?? entry?.day;
+                        if (day) onSelectDay(day);
+                      }
+                    : undefined
+                }
+              />
+            ))}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

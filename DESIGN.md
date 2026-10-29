@@ -950,7 +950,12 @@ Layout, top to bottom:
 2. **Daily chart** — the main view. Recharts `LineChart` (or `ComposedChart` with
    bars) of cost per day. Controls: range (30 / 90 / 365 / all), project filter,
    provider filter, UTC vs local days toggle. A `ReferenceLine` at 0 makes the
-   many zero-cost days legible.
+   many zero-cost days legible. Each bar is stacked in the four parts the provider billed —
+   completion tokens, prompt tokens, cache reads, cache writes — in four colors across two
+   hues: warm amber for the money paid per token of text, the page's cool accent for cache
+   money. Segments are separated by a hairline in the panel's own color, so the stack reads
+   as ledger bands and the fills do not have to be far apart in hue to stay legible. The
+   hourly drill-down stacks the same four, in the same colors.
 3. **Model breakdown** — bar list of spend by provider/model, since the zero-cost
    finding makes this the most informative panel on this machine.
 4. **Session table** — paginated, newest first: name, project, started, tokens,

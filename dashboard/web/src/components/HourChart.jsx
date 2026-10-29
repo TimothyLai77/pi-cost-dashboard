@@ -7,6 +7,10 @@
  *
  * Like the daily chart, it prints no caption: the 24 hour labels, the bars, and the volume
  * band carry the reading, and the zone is in the legend next to the day.
+ *
+ * Each hour's bar is stacked in the four parts the provider billed it in, in the same colors
+ * and order as the daily chart, so an hour that burned money on output looks different from
+ * an hour that was mostly prompt re-reads.
  */
 
 import {
@@ -21,24 +25,28 @@ import {
 } from "recharts";
 
 import { formatCost, formatTokens } from "../api.js";
+import { COST_PARTS, moneyBreakdown, partDollars } from "./costParts.js";
 
-const MONEY = "var(--money)";
 const VOLUME = "var(--volume)";
 
 /**
- * Tooltip over one hour: spend, volume, and how many sessions billed in it.
+ * Tooltip over one hour: spend, what the spend was made of, volume, and who billed in it.
  * @param {{ active?: boolean, payload?: any[] }} props
  * @returns {JSX.Element | null}
  */
 const HourTooltip = ({ active, payload }) => {
-  if (!active || payload?.length !== 1) return null;
-  const point = payload[0].payload;
+  // A stacked bar contributes one payload entry per part, so the guard is "is there a
+  // datum", not "is there exactly one series".
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+  const money = moneyBreakdown(point);
   return (
     <div className="state" style={{ border: "1px solid var(--rule-strong)", background: "var(--paper-raised)" }}>
       <span className="eyebrow">
         {point.day} · {point.label}
       </span>
       <div className="numeral">{formatCost(point.costMicros, point.costMicros > 0 && point.costMicros < 10000 ? 4 : 2)}</div>
+      {money ? <div className="numeral tooltip-money">{money}</div> : null}
       <div className="numeral" style={{ color: "var(--ink-faint)" }}>
         {formatTokens(point.totalTokens)} tokens · {point.sessions} session{point.sessions === 1 ? "" : "s"} ·{" "}
         {point.events} call{point.events === 1 ? "" : "s"}
@@ -63,10 +71,12 @@ export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC" }
   return (
     <>
       <div className="chart-legend">
-        <span>
-          <span className="swatch swatch-money" />
-          Spend
-        </span>
+        {COST_PARTS.map((part) => (
+          <span key={part.key}>
+            <span className={`swatch ${part.swatch}`} />
+            {part.label}
+          </span>
+        ))}
         <span>
           <span className="swatch swatch-volume" />
           <span title="input + output + cache reads + cache writes. Cache reads are counted again on every model call, so this bar tracks model calls x context size, not spend.">
@@ -106,14 +116,20 @@ export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC" }
               fillOpacity={0.35}
               isAnimationActive={false}
             />
-            <Bar
-              yAxisId="cost"
-              dataKey={(point) => Number((point.costMicros / 1e6).toFixed(4))}
-              name="costUsd"
-              fill={MONEY}
-              maxBarSize={10}
-              isAnimationActive={false}
-            />
+            {COST_PARTS.map((part) => (
+              <Bar
+                key={part.key}
+                yAxisId="cost"
+                stackId="cost"
+                dataKey={(point) => partDollars(point, part.key)}
+                name={part.key}
+                fill={part.color}
+                stroke="var(--paper-raised)"
+                strokeWidth={1}
+                maxBarSize={10}
+                isAnimationActive={false}
+              />
+            ))}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

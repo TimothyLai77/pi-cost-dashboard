@@ -13,6 +13,7 @@
  */
 
 import { formatTokens } from "../api.js";
+import { COST_PARTS } from "./costParts.js";
 
 /**
  * The four token kinds behind a window's total, as a compact second line.
@@ -26,9 +27,6 @@ const tokenKinds = (window) =>
     `out ${formatTokens(window?.outputTokens ?? 0)}`,
     ...(window?.cacheWriteTokens > 0 ? [`cache write ${formatTokens(window.cacheWriteTokens)}`] : []),
   ].join(" · ");
-
-/** The four parts of a bill, in the order the line shows them: biggest first, usually. */
-const COST_PART_LABELS = { output: "out", input: "in", cacheRead: "cache read", cacheWrite: "cache write" };
 
 /**
  * The window's spend in the four parts the provider billed it in.
@@ -49,7 +47,7 @@ const costParts = (window) => {
   // until the server is updated.
   if (!window?.costBreakdown) return null;
 
-  const parts = Object.entries(COST_PART_LABELS).map(([key, label]) => ({
+  const parts = COST_PARTS.map(({ key, label }) => ({
     label,
     costUsd: window.costBreakdown[key]?.costUsd ?? "$0.00",
     costMicros: window.costBreakdown[key]?.costMicros ?? 0,
