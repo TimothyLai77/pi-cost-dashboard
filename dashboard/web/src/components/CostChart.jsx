@@ -99,7 +99,6 @@ export const CostChart = ({ points, range, onSelectDay }) => {
             {range.timeZone} {range.offsetLabel}
           </span>
         )}
-        {onSelectDay && <span className="legend-hint">click a bar for its hours</span>}
       </div>
 
       <div style={{ height: "20rem" }}>
