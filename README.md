@@ -3,8 +3,8 @@
 Charts the dollar cost of Pi coding-agent sessions over time.
 
 **Status: built, all 8 phases.** The aggregator, SQLite store, backfill, read API, ingest
-endpoint, React dashboard, and the Pi extension all work against real session data: 280
-sessions, $65 of recorded spend, 77 passing tests. Plan and measurements in
+endpoint, React dashboard, and the Pi extension all work against real session data — as of
+2026-10-29, 288 sessions, $92.75 of recorded spend, 158 passing tests. Plan and measurements in
 [DESIGN.md](./DESIGN.md); run instructions in [dashboard/README.md](./dashboard/README.md).
 
 ## Layout

@@ -16,7 +16,7 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 107 tests
+npm test             # 158 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and

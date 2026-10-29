@@ -74,16 +74,6 @@ const clampLimit = (rawValue, fallback = DEFAULT_PAGE_SIZE) => {
 };
 
 /**
- * Totals for a window, and for all time.
- *
- * Sessions are counted by distinct sessions contributing usage in the window; cost is
- * counted by when the usage happened, which is the same basis the chart uses.
- *
- * @param {import("better-sqlite3").Database} db
- * @param {number} [days] Window length in days, counted backwards from today (UTC)
- * @returns {{ window: object, allTime: object, today: object, last7Days: object, last30Days: object }}
- */
-/**
  * SQL condition that drops nested subagent sessions, when the caller asked for that.
  *
  * Pi bills a subagent twice over: the child session file carries its own usage, and the
