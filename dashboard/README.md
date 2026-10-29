@@ -177,7 +177,7 @@ PI_COST_TZ=Asia/Kolkata     # half-hour and 45-minute offsets work too
 ```
 
 Stored timestamps stay UTC; only the buckets change. The page names the zone it used in the
-masthead, the chart legend, and the hourly note, so a screenshot says which clock its bars
+chart legend and the hourly note, so a screenshot says which clock its bars
 are on. There is no per-viewer picker: the server computes the buckets, so every screen
 shows the same answer.
 

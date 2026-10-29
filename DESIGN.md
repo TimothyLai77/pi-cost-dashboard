@@ -368,8 +368,8 @@ in a zone the operator did not ask for. The zone drives:
 - day buckets on the daily chart,
 - the 24 hour labels in the drill-down,
 - the Today / 7-day / 30-day summary windows, where "today" starts at local midnight,
-- and the labels the page shows: the masthead, the chart legends, and the chart notes all
-  name the zone and its offset for the window in view (`UTC-6` for an October range in
+- and the labels the page shows: the chart legends and the chart notes name
+  the zone and its offset for the window in view (`UTC-6` for an October range in
   Denver, `UTC-7` for a January one).
 
 There is deliberately no per-viewer control. The numbers on screen are computed server-side

@@ -94,10 +94,6 @@ export const App = () => {
   // Sent as 1/0 on every aggregate so the whole page answers the same question.
   const subagents = includeSubagents ? 1 : 0;
 
-  // The zone the server buckets in comes from the server (PI_COST_TZ), so there is no
-  // per-viewer control: the page reads the zone off the API and labels itself with it.
-  const config = useApi("/api/config", { _k: refreshKey });
-
   const summary = useApi("/api/summary", { days: range.days ?? 7, subagents, _k: refreshKey });
   const filters = useApi("/api/filters", { _k: refreshKey });
   const models = useApi("/api/models", { subagents, _k: refreshKey });
