@@ -604,7 +604,9 @@ in the charts, and nothing in the page reads it from those three endpoints.
 
 Every aggregate accepts `subagents=1` (default, count nested subagent sessions)
 or `subagents=0` (count only what each session paid directly). Any other value is
-a 400 naming the parameter.
+a 400 naming the parameter. The dashboard stopped sending it: the UI checkbox was removed
+because subagents are not used on this machine, so the page always takes the default. The
+parameter and its validation stay, tested server-side.
 
 `/api/health` is the operator's sanity check: if `sessionCount` stops tracking
 the file count, the scanner is broken.
@@ -1039,7 +1041,7 @@ small "hours…" pill over it. The pill replaces nothing, so nothing moves.
 hovered bar's day, the five most recent days in the range are prefetched when the daily series
 arrives, and a click on a cached day swaps with no request at all. The key includes the day and
 every filter plus the refresh tick, so a cached day can never be served under a different
-project, provider, subagent setting, or refresh. Entries are capped at 64 with
+project, provider, date range, or refresh. Entries are capped at 64 with
 least-recently-used eviction, a failed entry is dropped so the next attempt asks again, and a
 click on a day whose prefetch is in flight reuses that request instead of adding a second one.
 

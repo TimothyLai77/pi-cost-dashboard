@@ -437,12 +437,6 @@ button.ghost {
   padding: var(--space-2) var(--space-3);
 }
 
-.controls input[type="checkbox"] {
-  accent-color: var(--live);
-  width: 0.9rem;
-  height: 0.9rem;
-}
-
 :where(button, select, a, input):focus-visible {
   outline: 2px solid var(--live);
   outline-offset: 2px;

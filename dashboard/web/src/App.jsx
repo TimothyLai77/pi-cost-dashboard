@@ -1,6 +1,3 @@
-/** localStorage key holding the subagent-spend choice. @type {string} */
-const SUBAGENTS_STORAGE_KEY = "pi-cost-subagents";
-
 /**
  * Dashboard root: owns the filter state the chart, model list, and session table share.
  *
@@ -75,30 +72,15 @@ export const App = () => {
   const [provider, setProvider] = useState("");
   const [page, setPage] = useState(0);
   const [refreshKey, setRefreshKey] = useState(0);
-  // Pi bills a subagent as its own session and again inside its parent's toolResult usage.
-  // Counting both is the honest total, so it is the default; you can drop the nested ones.
-  const [includeSubagents, setIncludeSubagents] = useState(
-    () => localStorage.getItem(SUBAGENTS_STORAGE_KEY) !== "off",
-  );
-  const setSubagents = (checked) => {
-    setIncludeSubagents(checked);
-    try {
-      localStorage.setItem(SUBAGENTS_STORAGE_KEY, checked ? "on" : "off");
-    } catch {
-      // A blocked localStorage means the choice just does not persist. Not a reason to break the page.
-    }
-  };
   // The day whose hours are showing, set by clicking a bar. Null means the daily view.
   const [drillDay, setDrillDay] = useState(null);
   const theme = useTheme();
 
   const range = RANGES[rangeIndex];
-  // Sent as 1/0 on every aggregate so the whole page answers the same question.
-  const subagents = includeSubagents ? 1 : 0;
 
-  const summary = useApi("/api/summary", { days: range.days ?? 7, subagents, _k: refreshKey });
+  const summary = useApi("/api/summary", { days: range.days ?? 7, _k: refreshKey });
   const filters = useApi("/api/filters", { _k: refreshKey });
-  const models = useApi("/api/models", { subagents, _k: refreshKey });
+  const models = useApi("/api/models", { _k: refreshKey });
 
   // Which unit the flow bands are sized in. Money is the page's subject; tokens is the view
   // where the models priced at zero appear at all.
@@ -116,18 +98,16 @@ export const App = () => {
     ...rangeParams,
     cwd: project,
     provider,
-    subagents,
     _k: refreshKey,
   });
 
   // The flow diagram answers the question the ledger panels cannot: which model's money
-  // landed in which project. It reads the same range, project, provider and subagent filters.
+  // landed in which project. It reads the same range, project, and provider filters.
   const flows = useApi("/api/flows", {
     metric: flowMetric,
     ...rangeParams,
     cwd: project,
     provider,
-    subagents,
     _k: refreshKey,
   });
 
@@ -135,7 +115,6 @@ export const App = () => {
     limit: 15,
     offset: page * 15,
     cwd: project,
-    subagents,
     _k: refreshKey,
   });
 
@@ -145,7 +124,6 @@ export const App = () => {
   const hourly = useHourlyDrill(drillDay, {
     cwd: project,
     provider,
-    subagents,
     _k: refreshKey,
   });
 
@@ -200,7 +178,7 @@ export const App = () => {
   // Bars animate when a series is new to the panel and stay still when the 30s refresh
   // returns the same series with newer numbers. Re-animating on every refresh is the kind of
   // flashing this panel is meant to get rid of.
-  const dailySeriesKey = `${range.days}|${project}|${provider}|${subagents}`;
+  const dailySeriesKey = `${range.days}|${project}|${provider}`;
   const lastDailyKey = useRef(null);
   const dailyAnimate = lastDailyKey.current !== dailySeriesKey;
   useEffect(() => {
@@ -268,16 +246,6 @@ export const App = () => {
               </button>
             ))}
           </span>
-          <label
-            title="A subagent is billed as its own session and again inside its parent's tool-result usage. Counting both is the full spend; turning this off shows only what each session paid directly."
-          >
-            <input
-              type="checkbox"
-              checked={includeSubagents}
-              onChange={(event) => setSubagents(event.target.checked)}
-            />
-            Subagent spend
-          </label>
           <button type="button" className="ghost" onClick={reloadAll}>
             Refresh
           </button>

@@ -9,7 +9,7 @@
  *
  * The cache is keyed by day plus every filter that changes the answer, and it is rebuilt
  * whenever those filters change, so a cached day can never be served under a different
- * project, provider, subagent setting, or refresh tick.
+ * project, provider, date range, or refresh tick.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

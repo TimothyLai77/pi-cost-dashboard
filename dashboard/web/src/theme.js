@@ -64,8 +64,8 @@ export const writePreference = (preference) => {
 /**
  * Apply a setting to the document.
  *
- * `color-scheme` is set alongside the attribute so native form controls — the project
- * and provider selects, the checkbox — render with the right palette instead of
+ * `color-scheme` is set alongside the attribute so native form controls — the day,
+ * project, and provider selects — render with the right palette instead of
  * borrowing the operating system's.
  *
  * @param {string} preference

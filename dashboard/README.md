@@ -190,7 +190,10 @@ drawing covers instead of implying it is the whole bill.
 Every aggregate also takes `subagents=1` (default, count nested sessions) or
 `subagents=0` (only what each session paid directly). A subagent is billed as its
 own session file and again inside its parent's tool-result usage, so totals count
-both by default; the session list marks nested rows with a `subagent` tag.
+both by default; the session list marks nested rows with a `subagent` tag. The page
+always asks for full spend — the checkbox that used to send `subagents=0` was removed
+when subagents turned out not to get used here, and the parameter is left in place for
+`curl` and for the API's own tests.
 
 Token figures are cumulative across model calls, not context size: a long session re-read its
 cached context on every call, so cache reads dominate the total — today's 114M tokens on this
@@ -296,4 +299,4 @@ tokens, and each rollup against both its own facts and the session file it came 
   `theme.js` owns the setting (Auto follows the operating system, Light and Dark pin it,
   choice stored in localStorage), and an inline script in `index.html` applies it before
   the first paint so a reload in dark mode does not flash light first. Form controls get
-  `color-scheme`, so the selects and checkbox render native to the palette.
+  `color-scheme`, so the selects render native to the palette.
