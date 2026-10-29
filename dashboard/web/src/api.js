@@ -112,6 +112,48 @@ export const formatCost = (costMicros, digits = 2) =>
   `$${(Number(costMicros || 0) / 1e6).toFixed(digits)}`;
 
 /**
+ * Format a micro-dollar amount with the precision that amount needs.
+ *
+ * A call billed under a cent reads as "$0.00" at two digits, which is indistinguishable
+ * from a call that billed nothing, so anything under 10 000 micro-dollars ($0.01) is
+ * written with four. Zero keeps two digits: a locally hosted model priced at zero should
+ * say "$0.00", not "$0.0000".
+ *
+ * Every place on the page that shows a cost figure goes through here, so a chart tooltip,
+ * a ledger row and a table cell cannot drift apart on the rounding rule.
+ *
+ * @param {number} costMicros Integer micro-US dollars
+ * @returns {string} e.g. "$13.73", "$0.0042", "$0.00"
+ */
+export const formatCostSmart = (costMicros) => {
+  const micros = Number(costMicros) || 0;
+  return formatCost(micros, micros > 0 && micros < 10_000 ? 4 : 2);
+};
+
+/**
+ * The four token kinds behind a total, in the order they dominate a bill.
+ *
+ * `totalTokens` is the sum of these four, and cache reads are the overwhelming majority of
+ * it: every model call re-reports the cached prefix it read. A session that cost $13.73 can
+ * show 113M tokens of which 112M are cache reads, so the bare total is not comparable to the
+ * cost and the split is what makes the number readable.
+ *
+ * Cache write is left out when it is zero, which is the common case, so the line stays short
+ * for the rows people actually read.
+ *
+ * @param {{ inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number } | null | undefined} row
+ *   Anything carrying the four token counts; missing ones read as zero
+ * @returns {string} e.g. "cache read 112M · in 415k · out 466k"
+ */
+export const tokenKinds = (row) =>
+  [
+    `cache read ${formatTokens(row?.cacheReadTokens ?? 0)}`,
+    `in ${formatTokens(row?.inputTokens ?? 0)}`,
+    `out ${formatTokens(row?.outputTokens ?? 0)}`,
+    ...(row?.cacheWriteTokens > 0 ? [`cache write ${formatTokens(row.cacheWriteTokens)}`] : []),
+  ].join(" · ");
+
+/**
  * Shorten a project path to its last segment, which is what identifies it to a person.
  * @param {string | null} cwd
  * @returns {string}

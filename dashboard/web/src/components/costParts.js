@@ -13,7 +13,7 @@
  * of the chart colors were picked by.
  */
 
-import { formatCost } from "../api.js";
+import { formatCostSmart } from "../api.js";
 
 /**
  * Stacking order, biggest first: on a coding agent, completion tokens are the bulk of a
@@ -27,16 +27,6 @@ export const COST_PARTS = [
   { key: "cacheRead", label: "cache read", color: "var(--cost-cache-read)", swatch: "swatch-cost-cache-read" },
   { key: "cacheWrite", label: "cache write", color: "var(--cost-cache-write)", swatch: "swatch-cost-cache-write" },
 ];
-
-/**
- * Micro-dollars as dollars, with the extra digits a small figure needs.
- * @param {number} [costMicros]
- * @returns {string} e.g. "$1.76", "$0.0042"
- */
-const dollars = (costMicros) => {
-  const micros = costMicros ?? 0;
-  return formatCost(micros, micros > 0 && micros < 10000 ? 4 : 2);
-};
 
 /**
  * One window's spend as the four parts, each with its share of that window's own money.
@@ -65,7 +55,7 @@ export const costSplit = (point) => {
       label,
       color,
       costMicros,
-      costUsd: point.costBreakdown[key]?.costUsd ?? dollars(costMicros),
+      costUsd: point.costBreakdown[key]?.costUsd ?? formatCostSmart(costMicros),
       share: totalMicros > 0 ? (costMicros / totalMicros) * 100 : 0,
     };
   });
@@ -94,7 +84,7 @@ export const costSplit = (point) => {
  */
 export const moneyBreakdown = (point) => {
   if (!point?.costBreakdown) return null;
-  return COST_PARTS.map((part) => `${part.label} ${dollars(point.costBreakdown[part.key]?.costMicros)}`).join(" · ");
+  return COST_PARTS.map((part) => `${part.label} ${formatCostSmart(point.costBreakdown[part.key]?.costMicros)}`).join(" · ");
 };
 
 /**

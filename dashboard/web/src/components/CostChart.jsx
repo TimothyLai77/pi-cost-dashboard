@@ -30,7 +30,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { formatCost, formatTokens } from "../api.js";
+import { formatTokens, formatCostSmart } from "../api.js";
 import { COST_PARTS, moneyBreakdown, partDollars } from "./costParts.js";
 
 const VOLUME = "var(--volume)";
@@ -52,7 +52,7 @@ const DayTooltip = ({ active, payload }) => {
       style={{ border: "1px solid var(--rule-strong)", background: "var(--paper-raised)" }}
     >
       <span className="eyebrow">{point.day}</span>
-      <div className="numeral">{formatCost(point.costMicros, point.costMicros > 0 && point.costMicros < 10000 ? 4 : 2)}</div>
+      <div className="numeral">{formatCostSmart(point.costMicros)}</div>
       {money ? <div className="numeral tooltip-money">{money}</div> : null}
       <div className="numeral" style={{ color: "var(--ink-faint)" }}>
         {formatTokens(point.totalTokens)} tokens · {point.sessions} session{point.sessions === 1 ? "" : "s"} ·{" "}

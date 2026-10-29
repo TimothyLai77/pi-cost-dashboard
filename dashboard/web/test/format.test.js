@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { formatCost, formatTokens } from "../src/api.js";
+import { formatCost, formatCostSmart, formatTokens, tokenKinds } from "../src/api.js";
 
 test("formatTokens runs k → M → B and keeps about three significant digits", () => {
   const cases = [
@@ -48,4 +48,43 @@ test("formatCost keeps micro-dollar integers readable at both scales", () => {
   // Sub-cent amounts round to nothing at two digits, which is why the UI asks for four.
   assert.equal(formatCost(600), "$0.00");
   assert.equal(formatCost(600, 4), "$0.0006");
+});
+
+test("formatCostSmart picks the digits a figure needs, and never renders free as $0.0000", () => {
+  const cases = [
+    [13_729_975, "$13.73"],
+    [600, "$0.0006"],
+    [9_999, "$0.0100"],
+    // The boundary: $0.01 and above go back to two digits.
+    [10_000, "$0.01"],
+    // Zero is priced, not unmeasured. Four digits here reads as a fake-precision $0.0000.
+    [0, "$0.00"],
+  ];
+
+  for (const [input, expected] of cases) {
+    assert.equal(formatCostSmart(input), expected, `${input} renders as ${expected}`);
+  }
+});
+
+test("formatCostSmart treats a missing figure as no spend", () => {
+  // Chart points and flow nodes can arrive without a cost field.
+  assert.equal(formatCostSmart(undefined), "$0.00");
+  assert.equal(formatCostSmart(null), "$0.00");
+});
+
+test("tokenKinds lists the kinds that dominate a bill, in cache-read-first order", () => {
+  assert.equal(
+    tokenKinds({ cacheReadTokens: 112_000_000, inputTokens: 415_000, outputTokens: 466_000, cacheWriteTokens: 0 }),
+    "cache read 112M · in 415k · out 466k",
+  );
+});
+
+test("tokenKinds adds cache write only when there is any", () => {
+  const withWrite = tokenKinds({ cacheReadTokens: 0, inputTokens: 0, outputTokens: 0, cacheWriteTokens: 2_000 });
+  assert.equal(withWrite, "cache read 0 · in 0 · out 0 · cache write 2.0k");
+});
+
+test("tokenKinds handles the rows that have no counts at all", () => {
+  assert.equal(tokenKinds({}), "cache read 0 · in 0 · out 0");
+  assert.equal(tokenKinds(undefined), "cache read 0 · in 0 · out 0");
 });

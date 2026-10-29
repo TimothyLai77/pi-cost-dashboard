@@ -13,7 +13,7 @@
  * tokens of which 112M are cache reads, so the bare total is not comparable to the cost.
  */
 
-import { formatCost, formatTokens, shortProject } from "../api.js";
+import { formatTokens, formatCostSmart, shortProject, tokenKinds } from "../api.js";
 
 /** Minutes of recent activity for a session to be tagged live. @type {number} */
 const LIVE_WINDOW_MINUTES = 15;
@@ -30,23 +30,6 @@ const isActiveNow = (lastActivityAt) => {
   const ageMinutes = (Date.now() - then) / 60000;
   return ageMinutes >= 0 && ageMinutes <= LIVE_WINDOW_MINUTES;
 };
-
-/**
- * The four token kinds behind a session's total, in words.
- *
- * Cache write is left out when it is zero, which is the common case, so the line stays short
- * for the rows people actually read.
- *
- * @param {{ inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number }} session
- * @returns {string} e.g. "cache read 112M · in 415k · out 466k"
- */
-const tokenKinds = (session) =>
-  [
-    `cache read ${formatTokens(session.cacheReadTokens ?? 0)}`,
-    `in ${formatTokens(session.inputTokens ?? 0)}`,
-    `out ${formatTokens(session.outputTokens ?? 0)}`,
-    ...(session.cacheWriteTokens > 0 ? [`cache write ${formatTokens(session.cacheWriteTokens)}`] : []),
-  ].join(" · ");
 
 /**
  * @param {{
@@ -117,7 +100,7 @@ export const SessionTable = ({ result, onPrev, onNext }) => {
                 <span className="token-kinds">{tokenKinds(session)}</span>
               </td>
               <td className="cost numeral">
-                {session.costMicros === 0 ? "—" : formatCost(session.costMicros, session.costMicros < 10000 ? 4 : 2)}
+                {session.costMicros === 0 ? "—" : formatCostSmart(session.costMicros)}
               </td>
             </tr>
           ))}

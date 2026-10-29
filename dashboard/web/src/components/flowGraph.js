@@ -12,7 +12,7 @@
  * indexes. `toIndexedLinks` is the bridge.
  */
 
-import { formatCost, formatTokens } from "../api.js";
+import { formatTokens, formatCostSmart } from "../api.js";
 import { COST_PARTS } from "./costParts.js";
 
 /**
@@ -114,7 +114,7 @@ export const flowTooltipLines = (entry) => {
 
   return {
     title,
-    money: formatCost(entry.costMicros, entry.costMicros > 0 && entry.costMicros < 10000 ? 4 : 2),
+    money: formatCostSmart(entry.costMicros),
     // The four parts belong to a band: a node sums flows from many bills, and its own parts
     // come from the node's totals, which the server does not split into parts.
     parts: isNode

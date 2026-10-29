@@ -17,21 +17,8 @@
  * carries the size. A cell that spent nothing shows the bare track.
  */
 
-import { formatTokens } from "../api.js";
+import { formatTokens, tokenKinds } from "../api.js";
 import { costSplit } from "./costParts.js";
-
-/**
- * The four token kinds behind a window's total, as a compact second line.
- * @param {{ inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheWriteTokens?: number }} window
- * @returns {string} e.g. "cache read 113M · in 494k · out 480k"
- */
-const tokenKinds = (window) =>
-  [
-    `cache read ${formatTokens(window?.cacheReadTokens ?? 0)}`,
-    `in ${formatTokens(window?.inputTokens ?? 0)}`,
-    `out ${formatTokens(window?.outputTokens ?? 0)}`,
-    ...(window?.cacheWriteTokens > 0 ? [`cache write ${formatTokens(window.cacheWriteTokens)}`] : []),
-  ].join(" · ");
 
 /**
  * One window of the strip: label, total, the money split as a bar and as dollars, tokens.
