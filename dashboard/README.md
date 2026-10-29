@@ -142,6 +142,7 @@ dashboard/
 | `GET` | `/api/hourly?day&cwd&provider&subagents` | one day's 24 hours, zero-filled |
 | `GET` | `/api/sessions/:id` | one session with its usage facts |
 | `GET` | `/api/models` | spend by provider and model |
+| `GET` | `/api/flows?metric&limit&from&to&cwd&provider&subagents` | model→project bands: nodes and links, top `limit` per side with an `all other` roll-up |
 | `GET` | `/api/filters` | project and provider values for the controls |
 | `GET` | `/api/health` | counts, schema version, last scan |
 | `GET` | `/api/config` | zone the server buckets in, its offset label, and where the setting came from |
@@ -157,6 +158,16 @@ host-side `PI_COST_BIND` in `compose.yml` decides who can reach it.
 cost figure: `input`, `output`, `cacheRead` and `cacheWrite`, each a `{ costMicros, costUsd }`
 pair. Those are the four parts of the bill Pi reports, so the page can show what the money
 went to, not only how much it was. A bucket with no spend has four zero parts.
+
+`/api/flows` answers the question the ledger panels cannot: which model's money landed in
+which project. It returns `nodes` (models on the left, projects on the right) and `links`
+(one per pair) with each band carrying its own `costBreakdown`. `metric=cost` sizes bands in
+micro-dollars, `metric=tokens` sizes them in tokens. Only the top `limit` (default 6) models
+and top `limit` projects get a node of their own and the tail is rolled into an `all other`
+node that carries the full totals of what it absorbed; `dropped.rolled` counts the identities
+folded away, `dropped.flows` counts the pairs with none of the chosen metric, and `totals`
+always describes the whole filtered window — so the page can say how much of the bill the
+drawing covers instead of implying it is the whole bill.
 
 Every aggregate also takes `subagents=1` (default, count nested sessions) or
 `subagents=0` (only what each session paid directly). A subagent is billed as its
@@ -182,6 +193,16 @@ All four parts are
 always shown, zeros included — a locally hosted model is priced at zero, and "$0.00" four
 times is the honest label for a busy free window. Hover for the exact micro-dollar figures;
 each part is rounded for display, so the four can land a cent away from the window's total.
+
+Below the model ledger, **Money from model to project** draws the spend as a flow diagram:
+models on the left, projects on the right, one band per pair, width = the money that pair
+billed. Bands are colored by model on a seven-hue ramp (`--flow-1` … `--flow-7`) that is
+deliberately separate from the four cost hues — in the charts a color means "which part of
+the bill", here it means "which model", and sharing hues between the two would make one
+color say two things. Project nodes are neutral, so color is the model and position is the
+project. The **Tokens** button re-sizes every band in tokens, which is a different picture:
+the model that moved 746M tokens on this machine billed $0.00, so the money view does not
+draw it at all and the token view draws it as the widest node on the page.
 
 ## Timezone
 

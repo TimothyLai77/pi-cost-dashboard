@@ -562,6 +562,7 @@ Server-side, in this order:
 | `GET` | `/api/sessions?limit&offset&cwd&sort` | Session table, newest first |
 | `GET` | `/api/sessions/:id` | One session, full totals and events |
 | `GET` | `/api/models` | Per-model spend, from `model_cost` |
+| `GET` | `/api/flows?metric&limit&from&to&cwd&provider&subagents` | Model→project graph: nodes, links, roll-up and drop counts |
 | `POST` | `/api/rescan` | Run an incremental scan now, report what changed |
 | `GET` | `/api/health` | DB path, session count, last scan time, schema version |
 
@@ -960,9 +961,20 @@ Layout, top to bottom:
    are separated by a hairline in the panel's own color, so the stack reads as ledger bands.
    The hourly drill-down stacks the same four, in the same colors, and the summary strip uses
    the same hues for the same parts.
-3. **Model breakdown** — bar list of spend by provider/model, since the zero-cost
+3. **Money from model to project** — a flow diagram (Recharts `Sankey`): model nodes left,
+   project nodes right, one band per pair, width = the metric. Money by default, tokens on a
+   toggle, because on this machine the busiest model by tokens billed $0.00 and so has no
+   width in the money view at all. Bands wear a dedicated seven-hue ramp (`--flow-1` …
+   `--flow-7`) rather than the four cost hues: in the charts a hue means "which part of the
+   bill", here it means "which model", and one color must not carry both meanings. Project
+   nodes are neutral. Only the top `limit` nodes per side are drawn and the tail rolls into
+   an `all other` node carrying its own full totals; pairs with none of the chosen metric are
+   not drawn and are counted in the payload, and a node's label is one line — name plus its
+   own dollars — because two lines of label need more vertical room than seven nodes per side
+   afford.
+4. **Model breakdown** — bar list of spend by provider/model, since the zero-cost
    finding makes this the most informative panel on this machine.
-4. **Session table** — paginated, newest first: name, project, started, tokens,
+5. **Session table** — paginated, newest first: name, project, started, tokens,
    cost, `provisional` badge for push-only rows.
 
 Zero-cost days are expected, not an anomaly (10,203 of 13,898 assistant messages
