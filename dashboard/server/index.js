@@ -60,29 +60,45 @@ const parseInteger = (rawValue) => {
 };
 
 /**
- * Parse a 0/1 query flag.
- * @param {unknown} rawValue
- * @param {boolean} fallback Value to use when the parameter is absent
- * @returns {{ value: boolean } | { invalid: true }} invalid when the value is not a flag
+ * Request state the parameter middleware fills in before a handler runs.
+ * @typedef {import("express").Request & {
+ *   parsedParams?: Record<string, number>,
+ *   flags?: Record<string, boolean>,
+ * }} ParsedRequest
  */
-const parseFlag = (rawValue, fallback) => {
-  if (rawValue === undefined || rawValue === "") return { value: fallback };
-  if (rawValue === "1" || rawValue === "true") return { value: true };
-  if (rawValue === "0" || rawValue === "false") return { value: false };
-  return { invalid: true };
-};
 
 /**
- * Answer with the standard invalid-parameter body when a flag is not a flag.
- * @param {string} name Parameter name to report
- * @param {unknown} received What the client sent
- * @returns {(req: any, res: any) => boolean} true when it answered, false when the value is fine
+ * Parse a 0/1 query flag, and answer 400 when the value is not a flag.
+ *
+ * Parsing and rejecting used to be two functions, each restating the four accepted spellings,
+ * and every route taking a flag called both of them by hand. One middleware does both: it
+ * validates, stores the boolean on `req.flags[name]`, and ends the request with a 400 naming
+ * the parameter when the value is none of them, so the handler behind it can trust the flag.
+ *
+ * Absent means "the route's default", which keeps each route's default written in the route.
+ *
+ * @param {string} name Query parameter name
+ * @param {boolean} fallback Value to use when the parameter is absent
+ * @returns {import("express").RequestHandler}
  */
-const rejectBadFlag = (name, received) => (req, res) => {
-  if (received === undefined || received === "") return false;
-  if (received === "1" || received === "0" || received === "true" || received === "false") return false;
-  res.status(400).json({ error: "invalid_parameter", parameter: name, received });
-  return true;
+const flagParam = (name, fallback) => (req, res, next) => {
+  const received = req.query[name];
+  const value =
+    received === undefined || received === ""
+      ? fallback
+      : received === "1" || received === "true"
+        ? true
+        : received === "0" || received === "false"
+          ? false
+          : undefined;
+
+  if (value === undefined) {
+    res.status(400).json({ error: "invalid_parameter", parameter: name, received });
+    return;
+  }
+
+  req.flags = { ...req.flags, [name]: value };
+  next();
 };
 
 /**
@@ -94,11 +110,15 @@ const isIsoDate = (rawValue) => typeof rawValue === "string" && /^\d{4}-\d{2}-\d
 
 /**
  * Express middleware that rejects a malformed integer parameter.
- * @param {(value: number) => object} handler Query consumer
+ *
+ * Valid values land on `req.parsedParams`, so handlers read numbers and never re-parse a query
+ * string. It runs ahead of the handler it guards, flag middleware included, so a bad number is
+ * reported before anything downstream is evaluated.
+ *
  * @param {string[]} names Parameter names to validate
  * @returns {import("express").RequestHandler}
  */
-const requireIntegers = (handler, names) => (req, res, next) => {
+const requireIntegers = (names) => (req, res, next) => {
   const parsed = {};
   for (const name of names) {
     const value = parseInteger(req.query[name]);
@@ -108,8 +128,8 @@ const requireIntegers = (handler, names) => (req, res, next) => {
     }
     if (value !== null) parsed[name] = value;
   }
-  req.parsedParams = parsed;
-  return handler(req, res, next);
+  req.parsedParams = { ...req.parsedParams, ...parsed };
+  next();
 };
 
 /**
@@ -118,7 +138,13 @@ const requireIntegers = (handler, names) => (req, res, next) => {
  * Exported separately from `listen` so tests can drive routes without binding a port.
  *
  * @param {import("better-sqlite3").Database} db
- * @param {{ sessionsDir: string, fileCount?: () => number, rescan?: () => object }} dependencies
+ * @param {{
+ *   sessionsDir: string,
+ *   rescan: () => object,
+ *   fileCount?: () => number,
+ *   timeZone?: string | null,
+ * }} dependencies `rescan` backs POST /api/rescan; `timeZone` is the zone every bucket is
+ *   drawn in, null for UTC
  * @returns {import("express").Express}
  */
 export const createApp = (db, dependencies) => {
@@ -155,78 +181,83 @@ export const createApp = (db, dependencies) => {
 
   app.get(
     "/api/summary",
-    requireIntegers((req, res) => {
-      if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
+    requireIntegers(["days"]),
+    flagParam("subagents", true),
+    (req, res) => {
       res.json(
         getSummary(db, req.parsedParams.days ?? 7, {
-          includeSubagents: parseFlag(req.query.subagents, true).value,
+          includeSubagents: req.flags.subagents,
           timeZone: dependencies.timeZone ?? null,
         }),
       );
-    }, ["days"]),
+    },
   );
 
-  app.get("/api/hourly", (req, res) => {
-    const { day, cwd, provider } = req.query;
-    if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
-    // The drill-down is always one day, and the day comes from a chart bar, so a
-    // non-date here means a broken caller rather than a missing filter.
-    if (!isIsoDate(day)) {
-      res.status(400).json({ error: "invalid_parameter", parameter: "day", received: day });
-      return;
-    }
-    res.json(
-      getHourlyCost(db, {
-        day,
-        cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
-        provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
-        includeSubagents: parseFlag(req.query.subagents, true).value,
-        timeZone: dependencies.timeZone ?? null,
-      }),
-    );
-  });
+  app.get(
+    "/api/hourly",
+    flagParam("subagents", true),
+    (req, res) => {
+      const { day, cwd, provider } = req.query;
+      // The drill-down is always one day, and the day comes from a chart bar, so a
+      // non-date here means a broken caller rather than a missing filter.
+      if (!isIsoDate(day)) {
+        res.status(400).json({ error: "invalid_parameter", parameter: "day", received: day });
+        return;
+      }
+      res.json(
+        getHourlyCost(db, {
+          day,
+          cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
+          provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
+          includeSubagents: req.flags.subagents,
+          timeZone: dependencies.timeZone ?? null,
+        }),
+      );
+    },
+  );
 
-  app.get("/api/daily", (req, res) => {
-    const { from, to, cwd, provider } = req.query;
-    if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
-    if (from !== undefined && !isIsoDate(from)) {
-      res.status(400).json({ error: "invalid_parameter", parameter: "from", received: from });
-      return;
-    }
-    if (to !== undefined && !isIsoDate(to)) {
-      res.status(400).json({ error: "invalid_parameter", parameter: "to", received: to });
-      return;
-    }
-    res.json(
-      getDailyCost(db, {
-        from: isIsoDate(from) ? from : undefined,
-        to: isIsoDate(to) ? to : undefined,
-        cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
-        provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
-        includeSubagents: parseFlag(req.query.subagents, true).value,
-        timeZone: dependencies.timeZone ?? null,
-      }),
-    );
-  });
+  app.get(
+    "/api/daily",
+    flagParam("subagents", true),
+    (req, res) => {
+      const { from, to, cwd, provider } = req.query;
+      if (from !== undefined && !isIsoDate(from)) {
+        res.status(400).json({ error: "invalid_parameter", parameter: "from", received: from });
+        return;
+      }
+      if (to !== undefined && !isIsoDate(to)) {
+        res.status(400).json({ error: "invalid_parameter", parameter: "to", received: to });
+        return;
+      }
+      res.json(
+        getDailyCost(db, {
+          from: isIsoDate(from) ? from : undefined,
+          to: isIsoDate(to) ? to : undefined,
+          cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
+          provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
+          includeSubagents: req.flags.subagents,
+          timeZone: dependencies.timeZone ?? null,
+        }),
+      );
+    },
+  );
 
   app.get(
     "/api/sessions",
-    requireIntegers(
-      (req, res) => {
-        if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
-        res.json(
-          getSessions(db, {
-            limit: req.parsedParams.limit,
-            offset: req.parsedParams.offset,
-            cwd: typeof req.query.cwd === "string" ? req.query.cwd : undefined,
-            provider: typeof req.query.provider === "string" ? req.query.provider : undefined,
-            sort: req.query.sort === "cost" ? "cost" : "activity",
-            includeSubagents: parseFlag(req.query.subagents, true).value,
-          }),
-        );
-      },
-      ["limit", "offset"],
-    ),
+    requireIntegers(["limit", "offset"]),
+    flagParam("subagents", true),
+    (req, res) => {
+      res.json(
+        getSessions(db, {
+          limit: req.parsedParams.limit,
+          offset: req.parsedParams.offset,
+          cwd: typeof req.query.cwd === "string" ? req.query.cwd : undefined,
+          provider: typeof req.query.provider === "string" ? req.query.provider : undefined,
+          sort: req.query.sort === "cost" ? "cost" : "activity",
+          includeSubagents: req.flags.subagents,
+        }),
+      );
+    },
   );
 
   app.get("/api/sessions/:id", (req, res) => {
@@ -238,9 +269,8 @@ export const createApp = (db, dependencies) => {
     res.json(session);
   });
 
-  app.get("/api/models", (req, res) => {
-    if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
-    res.json(getModelCost(db, { includeSubagents: parseFlag(req.query.subagents, true).value }));
+  app.get("/api/models", flagParam("subagents", true), (req, res) => {
+    res.json(getModelCost(db, { includeSubagents: req.flags.subagents }));
   });
 
   // Which model spent what in which project, as a bipartite graph for the flow diagram.
@@ -248,9 +278,10 @@ export const createApp = (db, dependencies) => {
   // where the busiest model on the machine is the one priced at zero.
   app.get(
     "/api/flows",
-    requireIntegers((req, res) => {
+    requireIntegers(["limit"]),
+    flagParam("subagents", true),
+    (req, res) => {
       const { from, to, cwd, provider, metric } = req.query;
-      if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
       if (metric !== undefined && metric !== "cost" && metric !== "tokens") {
         res.status(400).json({ error: "invalid_parameter", parameter: "metric", received: metric });
         return;
@@ -271,11 +302,11 @@ export const createApp = (db, dependencies) => {
           to: isIsoDate(to) ? to : undefined,
           cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
           provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
-          includeSubagents: parseFlag(req.query.subagents, true).value,
+          includeSubagents: req.flags.subagents,
           timeZone: dependencies.timeZone ?? null,
         }),
       );
-    }, ["limit"]),
+    },
   );
   app.get("/api/filters", (_req, res) => res.json(getFilters(db)));
 
