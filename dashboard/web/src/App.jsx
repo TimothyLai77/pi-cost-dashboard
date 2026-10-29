@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useApi } from "./api.js";
 import { PREFERENCES, useTheme } from "./theme.js";
 import { CostChart } from "./components/CostChart.jsx";
+import { FlowsChart } from "./components/FlowsChart.jsx";
 import { HourChart } from "./components/HourChart.jsx";
 import { ModelBreakdown } from "./components/ModelBreakdown.jsx";
 import { SessionTable } from "./components/SessionTable.jsx";
@@ -98,6 +99,10 @@ export const App = () => {
   const filters = useApi("/api/filters", { _k: refreshKey });
   const models = useApi("/api/models", { subagents, _k: refreshKey });
 
+  // Which unit the flow bands are sized in. Money is the page's subject; tokens is the view
+  // where the models priced at zero appear at all.
+  const [flowMetric, setFlowMetric] = useState("cost");
+
   // "all" sends no bounds, so the server returns the full recorded history.
   const rangeParams = useMemo(() => {
     if (!range.days) return {};
@@ -107,6 +112,17 @@ export const App = () => {
   }, [range.days, refreshKey]);
 
   const chart = useApi("/api/daily", {
+    ...rangeParams,
+    cwd: project,
+    provider,
+    subagents,
+    _k: refreshKey,
+  });
+
+  // The flow diagram answers the question the ledger panels cannot: which model's money
+  // landed in which project. It reads the same range, project, provider and subagent filters.
+  const flows = useApi("/api/flows", {
+    metric: flowMetric,
     ...rangeParams,
     cwd: project,
     provider,
@@ -365,6 +381,31 @@ export const App = () => {
                 onNext={() => setPage((current) => current + 1)}
               />
             )}
+          </Panel>
+
+          <Panel
+            title="Money from model to project"
+            actions={
+              <span className="range-set" role="group" aria-label="Band unit">
+                {[
+                  ["cost", "Money"],
+                  ["tokens", "Tokens"],
+                ].map(([value, label]) => (
+                  <button
+                    type="button"
+                    key={value}
+                    aria-pressed={flowMetric === value}
+                    onClick={() => setFlowMetric(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </span>
+            }
+          >
+            {flows.loading && <div className="state">Loading flows…</div>}
+            {!flows.loading && flows.error && <div className="state state-error">{flows.error}</div>}
+            {!flows.loading && !flows.error && flows.data && <FlowsChart flows={flows.data} />}
           </Panel>
 
           <Panel title="Spend by model">

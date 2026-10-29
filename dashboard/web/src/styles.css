@@ -29,6 +29,18 @@
   --cost-cache-read: #3d6d97;
   --cost-cache-write: #3f7f70;
 
+  /* A flow band's hue, one per model. Deliberately not the four cost hues above: in the
+     charts those four mean "which part of the bill", and a band here means "which model", so
+     sharing hues between the two panels would make the same color say two different things.
+     Seven hues, hue-separated rather than lightness-separated, all clearing 4:1 on the panel. */
+  --flow-1: #2b6f9e;
+  --flow-2: #2f7d5f;
+  --flow-3: #8b4f9b;
+  --flow-4: #b0682b;
+  --flow-5: #0e6e8c;
+  --flow-6: #9c3b52;
+  --flow-7: #5d6b7a;
+
   /* The masthead's 2px ledger rule. Its own token because the color that reads as a
      confident ink rule on paper becomes a glaring lit line on a dark surface. */
   --rule-accent: var(--ink);
@@ -77,6 +89,15 @@
   --cost-input: #c3a24b;
   --cost-cache-read: #7fa7cc;
   --cost-cache-write: #5fa896;
+
+  /* The flow hues, lifted for the dark slate in the same hues as the light set. */
+  --flow-1: #74a9d0;
+  --flow-2: #6fbf9a;
+  --flow-3: #b795cf;
+  --flow-4: #d9a35c;
+  --flow-5: #6cc7dd;
+  --flow-6: #d9798c;
+  --flow-7: #9aa7b4;
 
   /* Softened to silver. Full ink on dark slate is 14.8:1 and reads as a lit line; the
      ledger's rule should be the strongest line on the page, not the brightest. */
