@@ -1,0 +1,64 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="560"
+  height="560"
+  fill="none"
+  viewBox="0 0 560 560"
+  shape-rendering="crispEdges"
+>
+  <!--
+    pi-cost-dashboard favicon.
+
+    Grid: 35-unit pixels, 16 across the 560 viewBox. At the 16x16 tab size one
+    grid pixel is exactly one CSS pixel, so nothing lands on a half pixel.
+
+    The pi mark is the upstream shape from https://pi.dev/favicon.svg scaled to
+    0.5, which turns its 140-unit pixels into 2 grid pixels each (8 grid pixels
+    wide overall, flush to the top-left corner as upstream is). That frees the
+    bottom-right 4x5 block for the dollar sign at x=385..525, y=350..525, one
+    grid pixel from the right and bottom edges and three pixels clear of the
+    mark. The mark and the sign share no grid pixel, and every edge lands on a
+    grid line, so nothing sits on a half pixel.
+
+    One fill class for everything, with the same prefers-color-scheme swap the
+    upstream mark uses, so the icon follows light and dark tab chrome.
+  -->
+  <style>
+    .mark {
+      fill: #111111;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .mark {
+        fill: #f6f6f6;
+      }
+    }
+  </style>
+
+  <!-- pi mark, scaled 0.5 (560 -> 280) -->
+  <g class="mark" transform="scale(0.5)">
+    <path d="M420 280H280V140H0V0H420V280Z" />
+    <path d="M560 560H420V280H560V560Z" />
+    <path d="M140 560H0V140H140V280H280V420H140V560Z" />
+  </g>
+
+  <!-- dollar sign: 4 grid pixels wide, 5 tall -->
+  <g class="mark">
+    <rect x="420" y="350" width="35" height="35" />
+    <rect x="455" y="350" width="35" height="35" />
+    <rect x="490" y="350" width="35" height="35" />
+
+    <rect x="385" y="385" width="35" height="35" />
+    <rect x="455" y="385" width="35" height="35" />
+
+    <rect x="420" y="420" width="35" height="35" />
+    <rect x="455" y="420" width="35" height="35" />
+
+    <rect x="455" y="455" width="35" height="35" />
+    <rect x="490" y="455" width="35" height="35" />
+
+    <rect x="385" y="490" width="35" height="35" />
+    <rect x="420" y="490" width="35" height="35" />
+    <rect x="455" y="490" width="35" height="35" />
+  </g>
+</svg>

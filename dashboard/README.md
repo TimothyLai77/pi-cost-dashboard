@@ -120,6 +120,8 @@ dashboard/
 │   └── test/               # node:test suites + fixtures
 └── web/
     ├── index.html          # inline theme script runs before first paint
+    ├── public/
+    │   └── favicon.svg     # pi mark + dollar sign on a 35-unit pixel grid
     └── src/
         ├── main.jsx
         ├── App.jsx
@@ -132,6 +134,21 @@ dashboard/
             ├── ModelBreakdown.jsx
             └── SessionTable.jsx
 ```
+
+## Favicon
+
+`web/public/favicon.svg` is the upstream Pi mark from `https://pi.dev/favicon.svg`
+(4x4 blocks on a 140-unit grid) scaled to 0.5, with a pixel dollar sign dropped
+into the bottom-right corner. Everything is on a 35-unit grid, 16 pixels across
+the 560 viewBox, so at the 16x16 tab size each grid pixel is exactly one CSS
+pixel and no edge lands on a half pixel. The sign sits at x385..525, y350..525:
+one pixel from the right and bottom edges, three pixels clear of the mark, no
+shared grid pixel between them.
+
+Fill is one class with the same `prefers-color-scheme` swap upstream uses
+(`#111111`, `#f6f6f6` in dark), so the tab icon follows the browser theme. Vite
+copies `web/public` to the dist root, and the server serves static files without
+a token, so `/favicon.svg` resolves on a bare page load.
 
 ## API
 
