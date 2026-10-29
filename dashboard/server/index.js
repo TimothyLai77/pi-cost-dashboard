@@ -25,6 +25,7 @@ import { migrateUp, openDatabase } from "./db.js";
 import { ingestSession } from "./ingest.js";
 import {
   getDailyCost,
+  getFlows,
   getHourlyCost,
   getFilters,
   getHealth,
@@ -241,6 +242,41 @@ export const createApp = (db, dependencies) => {
     if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
     res.json(getModelCost(db, { includeSubagents: parseFlag(req.query.subagents, true).value }));
   });
+
+  // Which model spent what in which project, as a bipartite graph for the flow diagram.
+  // `metric` picks the unit the bands are sized in: money by default, tokens for the view
+  // where the busiest model on the machine is the one priced at zero.
+  app.get(
+    "/api/flows",
+    requireIntegers((req, res) => {
+      const { from, to, cwd, provider, metric } = req.query;
+      if (rejectBadFlag("subagents", req.query.subagents)(req, res)) return;
+      if (metric !== undefined && metric !== "cost" && metric !== "tokens") {
+        res.status(400).json({ error: "invalid_parameter", parameter: "metric", received: metric });
+        return;
+      }
+      if (from !== undefined && !isIsoDate(from)) {
+        res.status(400).json({ error: "invalid_parameter", parameter: "from", received: from });
+        return;
+      }
+      if (to !== undefined && !isIsoDate(to)) {
+        res.status(400).json({ error: "invalid_parameter", parameter: "to", received: to });
+        return;
+      }
+      res.json(
+        getFlows(db, {
+          metric: metric === "tokens" ? "tokens" : "cost",
+          nodeLimit: req.parsedParams.limit,
+          from: isIsoDate(from) ? from : undefined,
+          to: isIsoDate(to) ? to : undefined,
+          cwd: typeof cwd === "string" && cwd.length > 0 ? cwd : undefined,
+          provider: typeof provider === "string" && provider.length > 0 ? provider : undefined,
+          includeSubagents: parseFlag(req.query.subagents, true).value,
+          timeZone: dependencies.timeZone ?? null,
+        }),
+      );
+    }, ["limit"]),
+  );
   app.get("/api/filters", (_req, res) => res.json(getFilters(db)));
 
   app.post("/api/rescan", requireToken, (_req, res) => {

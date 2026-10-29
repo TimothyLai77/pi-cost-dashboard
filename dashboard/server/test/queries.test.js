@@ -21,6 +21,7 @@ import { upsertSession } from "../upsert.js";
 import { aggregateSession } from "../scanner/aggregate.js";
 import {
   getDailyCost,
+  getFlows,
   getHourlyCost,
   getFilters,
   getHealth,
@@ -62,6 +63,27 @@ const seededDbWithSubagent = () => {
   const db = openDatabase(":memory:");
   migrateUp(db);
   for (const fixture of ["full-usage.jsonl", "usage-only.jsonl", "subagent.jsonl"]) {
+    const { session, events } = aggregateSession(
+      join(import.meta.dirname, "fixtures", fixture),
+    );
+    upsertSession(db, session, events, "scan");
+  }
+  return db;
+};
+
+/**
+ * A migrated in-memory database whose nested session lives in a project of its own.
+ *
+ * `subagent.jsonl` nests inside project-a, which is already in the set, so it cannot change
+ * the project count. `forked-zero-cost.jsonl` nests in project-c and bills nothing, which
+ * makes it the fixture that can show the subagent filter adding and removing a project.
+ *
+ * @returns {import("better-sqlite3").Database}
+ */
+const seededDbWithForkedChild = () => {
+  const db = openDatabase(":memory:");
+  migrateUp(db);
+  for (const fixture of ["full-usage.jsonl", "usage-only.jsonl", "forked-zero-cost.jsonl"]) {
     const { session, events } = aggregateSession(
       join(import.meta.dirname, "fixtures", fixture),
     );
@@ -481,6 +503,141 @@ test("daily and hourly points break tokens out by kind", () => {
     hourly.inputTokens + hourly.outputTokens + hourly.cacheReadTokens + hourly.cacheWriteTokens,
   );
   assert.ok(hourly.events > 0, "the number of billed calls is reported");
+  db.close();
+});
+
+test("getFlows draws money as model-to-project bands, leaving out what has no money", () => {
+  const db = seededDb();
+  const flows = getFlows(db);
+
+  assert.equal(flows.metric, "cost");
+  assert.equal(flows.nodeLimit, 6);
+  assert.deepEqual(
+    flows.links.map((link) => [link.source, link.target, link.costMicros]),
+    [
+      ["model:anthropic/claude-sonnet-4-5", "project:/home/user/project-b", 100000],
+      ["model:anthropic/claude-sonnet-4-5", "project:/home/user/project-a", 19250],
+    ],
+    "bands are ordered by the chosen metric",
+  );
+
+  // Nothing billed is left out, so the drawing is the whole bill in money terms.
+  assert.equal(flows.drawn.costMicros, flows.totals.costMicros);
+
+  // The custom-provider model billed nothing: it is counted, not drawn, and not a node.
+  assert.equal(flows.dropped.flows, 1);
+  assert.equal(flows.dropped.models, 1);
+  assert.equal(flows.dropped.projects, 0);
+  assert.equal(flows.dropped.rolled.models, 0, "both models fit under the node cap");
+  assert.equal(flows.totals.models, 2);
+  assert.equal(flows.totals.projects, 2);
+
+  const modelNode = flows.nodes.find((node) => node.kind === "model");
+  assert.deepEqual([modelNode.label, modelNode.sublabel], ["claude-sonnet-4-5", "anthropic"]);
+  const projectNode = flows.nodes.find((node) => node.id.endsWith("/home/user/project-b"));
+  assert.deepEqual([projectNode.label, projectNode.sublabel], ["project-b", "/home/user/project-b"]);
+
+  // Bands carry the four parts of the bill, so a tooltip can say what the money bought.
+  assert.equal(flows.links[0].costBreakdown.cacheRead.costMicros, 100000);
+  assert.equal(flows.links[0].costBreakdown.output.costMicros, 0);
+  db.close();
+});
+
+test("getFlows on tokens draws the models that were priced at zero", () => {
+  const db = seededDb();
+  const flows = getFlows(db, { metric: "tokens" });
+
+  assert.equal(flows.links.length, 3, "the free model's 10 tokens are a band in this view");
+  assert.equal(flows.drawn.totalTokens, flows.totals.totalTokens);
+  assert.equal(flows.dropped.flows, 0);
+
+  const freeNode = flows.nodes.find((node) => node.label === "cheap-model");
+  assert.ok(freeNode, "the free model is a node when tokens are the metric");
+  assert.equal(freeNode.costMicros, 0);
+  assert.equal(freeNode.sublabel, "custom");
+  db.close();
+});
+
+test("getFlows rolls the tail into an 'all other' node that carries its own totals", () => {
+  const db = seededDb();
+  const flows = getFlows(db, { nodeLimit: 1 });
+
+  assert.equal(flows.nodeLimit, 1);
+  assert.deepEqual(
+    flows.links.map((link) => [link.source, link.target, link.costMicros, link.rolledUp]),
+    [
+      ["model:anthropic/claude-sonnet-4-5", "project:/home/user/project-b", 100000, false],
+      ["model:anthropic/claude-sonnet-4-5", "project:all other", 19250, true],
+    ],
+  );
+
+  const other = flows.nodes.find((node) => node.id === "project:all other");
+  assert.deepEqual([other.label, other.sublabel, other.costMicros], ["all other", "1 more", 19250]);
+  assert.equal(other.rolledUp, true);
+
+  // The band sum still equals the whole bill: rolling up is not dropping.
+  assert.equal(flows.drawn.costMicros, flows.totals.costMicros);
+  assert.equal(flows.dropped.rolled.projects, 1);
+  db.close();
+});
+
+test("getFlows honours the subagent, project, provider, and date filters", () => {
+  const withChild = seededDbWithForkedChild();
+  const nested = getFlows(withChild);
+  assert.equal(nested.totals.projects, 3, "the nested session's own project is in the window");
+
+  const mainOnly = getFlows(withChild, { includeSubagents: false });
+  assert.equal(mainOnly.totals.projects, 2, "the nested session's project drops out with the filter");
+  assert.equal(mainOnly.totals.models, 2, "its model drops out too");
+
+  const db = seededDb();
+  const project = getFlows(db, { cwd: "/home/user/project-b" });
+  assert.equal(project.totals.costMicros, 100000);
+  assert.equal(project.totals.projects, 1);
+
+  const provider = getFlows(db, { provider: "custom" });
+  assert.deepEqual(
+    [provider.links.length, provider.totals.costMicros, provider.dropped.flows],
+    [0, 0, 1],
+    "the only custom-provider flow billed nothing, so there is no band to draw",
+  );
+
+  const oneDay = getFlows(db, { from: "2026-01-03", to: "2026-01-03", timeZone: "America/Denver" });
+  assert.deepEqual(
+    [oneDay.links.length, oneDay.totals.costMicros],
+    [1, 100000],
+    "the 2026-01-03 bill lands in that local day",
+  );
+  db.close();
+  withChild.close();
+});
+
+test("GET /api/flows sizes bands by the metric asked for and rejects a bad one", async () => {
+  const db = seededDb();
+  await withServer(db, async (base) => {
+    const money = await fetch(`${base}/api/flows`);
+    assert.equal(money.status, 200);
+    const moneyBody = await money.json();
+    assert.equal(moneyBody.metric, "cost");
+    assert.equal(moneyBody.links.length, 2);
+
+    const tokens = await fetch(`${base}/api/flows?metric=tokens&limit=1&subagents=0`);
+    assert.equal(tokens.status, 200);
+    const tokensBody = await tokens.json();
+    assert.deepEqual([tokensBody.metric, tokensBody.nodeLimit], ["tokens", 1]);
+
+    const badMetric = await fetch(`${base}/api/flows?metric=rubber`);
+    assert.equal(badMetric.status, 400);
+    assert.equal((await badMetric.json()).parameter, "metric");
+
+    const badLimit = await fetch(`${base}/api/flows?limit=lots`);
+    assert.equal(badLimit.status, 400);
+    assert.equal((await badLimit.json()).parameter, "limit");
+
+    const badDate = await fetch(`${base}/api/flows?from=yesterday`);
+    assert.equal(badDate.status, 400);
+    assert.equal((await badDate.json()).parameter, "from");
+  });
   db.close();
 });
 
