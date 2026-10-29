@@ -62,6 +62,153 @@ const costBreakdown = (row) => ({
 });
 
 /**
+ * The columns every aggregate reads when it sums usage facts itself.
+ *
+ * Daily, hourly and flow grouping all need money in its four parts, tokens in its four
+ * kinds, and the instant and session each fact belongs to. They read one shared column list
+ * so a bucket cannot sum a field the others leave out.
+ *
+ * @type {string}
+ */
+const FACT_COLUMNS = `u.occurred_at, u.session_id, u.cost_micros, u.total_tokens,
+              u.cost_input_micros, u.cost_output_micros, u.cost_cache_read_micros,
+              u.cost_cache_write_micros,
+              u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens`;
+
+/**
+ * Fields a bucket adds up out of every fact row, in the order the columns are read.
+ * @type {string[]}
+ */
+const BUCKET_SUM_FIELDS = [
+  "cost_micros",
+  "cost_input_micros",
+  "cost_output_micros",
+  "cost_cache_read_micros",
+  "cost_cache_write_micros",
+  "total_tokens",
+  "input_tokens",
+  "output_tokens",
+  "cache_read_tokens",
+  "cache_write_tokens",
+];
+
+/**
+ * WHERE clauses and parameters for the filters every aggregate over usage shares.
+ *
+ * Day bounds are local days in `timeZone` and become UTC instants here: `from` is the instant
+ * that day began (inclusive) and `to` is the instant the day after it began (exclusive), so a
+ * one-day window passes the same string as both. Timestamps are fixed-width ISO strings, so
+ * string comparison is chronological.
+ *
+ * The clauses name `u` (usage_events) and `s` (sessions), so the caller must join both. Each
+ * term is bare, without an `AND` prefix, because the caller joins the list with `AND`.
+ *
+ * @param {{ from?: string, to?: string, cwd?: string, provider?: string, includeSubagents?: boolean }} options
+ *   Absent bounds and filters add no clause
+ * @param {string | null} timeZone IANA zone name; null means UTC
+ * @returns {{ filters: string[], params: Record<string, string> }} Clauses to join, and their parameters
+ */
+const usageFilters = (options, timeZone) => {
+  const filters = [];
+  const params = {};
+  if (options.from) {
+    filters.push("u.occurred_at >= @start");
+    params.start = localDayStart(options.from, timeZone);
+  }
+  if (options.to) {
+    filters.push("u.occurred_at < @end");
+    params.end = localDayStart(nextDayString(options.to), timeZone);
+  }
+  if (options.cwd) {
+    filters.push("s.cwd = @cwd");
+    params.cwd = options.cwd;
+  }
+  if (options.provider) {
+    filters.push("u.provider = @provider");
+    params.provider = options.provider;
+  }
+  if (options.includeSubagents === false) {
+    filters.push("s.parent_session_id IS NULL");
+  }
+  return { filters, params };
+};
+
+/**
+ * A WHERE clause built from bare filter terms.
+ * @param {string[]} filters Terms the caller joins with AND
+ * @returns {string} `WHERE a AND b`, or an empty string when nothing filters
+ */
+const whereFrom = (filters) => (filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "");
+
+/**
+ * Sum usage facts into one bucket per time period.
+ *
+ * A bucket carries money in its four parts, tokens in their four kinds, a call count, and the
+ * set of sessions that touched the period. The period is a caller-supplied key, which is the
+ * only difference between the daily and hourly views: same facts, same sums, grouped by
+ * `localDay` in one and `localHour` in the other.
+ *
+ * @param {object[]} rows Facts read with the shared FACT_COLUMNS list
+ * @param {(row: object) => string} keyFor The period a fact belongs to
+ * @returns {Map<string, object>} Buckets keyed by period, in first-seen order
+ */
+const bucketFacts = (rows, keyFor) => {
+  const buckets = new Map();
+  for (const row of rows) {
+    const key = keyFor(row);
+    const bucket = buckets.get(key) ?? {
+      ...NO_COST_PARTS,
+      cost_micros: 0,
+      total_tokens: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      events: 0,
+      sessions: new Set(),
+    };
+    for (const field of BUCKET_SUM_FIELDS) {
+      bucket[field] += row[field];
+    }
+    bucket.events += 1;
+    bucket.sessions.add(row.session_id);
+    buckets.set(key, bucket);
+  }
+  return buckets;
+};
+
+/**
+ * One chart point from a bucket, in the shape every chart reads.
+ *
+ * A period with no facts is not a gap: it spent nothing, so it renders as a zero point with
+ * four zero parts. That is what keeps a zero-cost day on the chart instead of leaving a hole.
+ *
+ * @param {object | undefined} bucket The period's bucket, undefined when nothing landed in it
+ * @returns {object} costMicros, costUsd, costBreakdown, the four token kinds, events, sessions
+ */
+const pointFromBucket = (bucket) => ({
+  ...money(bucket?.cost_micros ?? 0),
+  costBreakdown: costBreakdown(bucket ?? NO_COST_PARTS),
+  totalTokens: bucket?.total_tokens ?? 0,
+  inputTokens: bucket?.input_tokens ?? 0,
+  outputTokens: bucket?.output_tokens ?? 0,
+  cacheReadTokens: bucket?.cache_read_tokens ?? 0,
+  cacheWriteTokens: bucket?.cache_write_tokens ?? 0,
+  events: bucket?.events ?? 0,
+  sessions: bucket ? bucket.sessions.size : 0,
+});
+
+/**
+ * A range's whole total, summed once from the points that make it up.
+ * @param {{ costMicros: number }[]} points
+ * @returns {{ totalCostMicros: number, totalCostUsd: string }}
+ */
+const pointsTotal = (points) => {
+  const totalCostMicros = points.reduce((sum, point) => sum + point.costMicros, 0);
+  return { totalCostMicros, totalCostUsd: formatUsd(totalCostMicros) };
+};
+
+/**
  * Clamp a requested page size.
  * @param {unknown} rawValue Value from a query parameter
  * @param {number} [fallback]
@@ -183,40 +330,16 @@ export const getSummary = (db, days = 7, options = {}) => {
 export const getDailyCost = (db, options = {}) => {
   const timeZone = options.timeZone ?? null;
 
-  // Bounds are local days, so they are converted to UTC instants: from-day start
-  // (inclusive) to the instant the day after `to` begins (exclusive). Timestamps are
-  // fixed-width ISO strings, so string comparison is chronological.
-  const filters = [];
-  const params = {};
-  if (options.from) {
-    filters.push("u.occurred_at >= @start");
-    params.start = localDayStart(options.from, timeZone);
-  }
-  if (options.to) {
-    filters.push("u.occurred_at < @end");
-    params.end = localDayStart(nextDayString(options.to), timeZone);
-  }
-  if (options.cwd) {
-    filters.push("s.cwd = @cwd");
-    params.cwd = options.cwd;
-  }
-  if (options.provider) {
-    filters.push("u.provider = @provider");
-    params.provider = options.provider;
-  }
-  if (options.includeSubagents === false) {
-    filters.push("s.parent_session_id IS NULL");
-  }
-  const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+  // Bounds are local days, so the shared builder turns them into UTC instants: from-day
+  // start (inclusive) to the instant the day after `to` begins (exclusive).
+  const { filters, params } = usageFilters(options, timeZone);
+  const whereClause = whereFrom(filters);
 
   // Facts, not SQL aggregates: the day a fact belongs to is a wall-clock question, and
   // SQLite has no timezone database. This is a few thousand rows on a large install.
   const rows = db
     .prepare(
-      `SELECT u.occurred_at, u.session_id, u.cost_micros, u.total_tokens,
-              u.cost_input_micros, u.cost_output_micros, u.cost_cache_read_micros,
-              u.cost_cache_write_micros,
-              u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens
+      `SELECT ${FACT_COLUMNS}
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
        ${whereClause}
@@ -224,37 +347,7 @@ export const getDailyCost = (db, options = {}) => {
     )
     .all(params);
 
-  const byDay = new Map();
-  for (const row of rows) {
-    const day = localDay(row.occurred_at, timeZone);
-    const bucket = byDay.get(day) ?? {
-      cost_micros: 0,
-      cost_input_micros: 0,
-      cost_output_micros: 0,
-      cost_cache_read_micros: 0,
-      cost_cache_write_micros: 0,
-      total_tokens: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-      events: 0,
-      sessions: new Set(),
-    };
-    bucket.cost_micros += row.cost_micros;
-    bucket.cost_input_micros += row.cost_input_micros;
-    bucket.cost_output_micros += row.cost_output_micros;
-    bucket.cost_cache_read_micros += row.cost_cache_read_micros;
-    bucket.cost_cache_write_micros += row.cost_cache_write_micros;
-    bucket.total_tokens += row.total_tokens;
-    bucket.input_tokens += row.input_tokens;
-    bucket.output_tokens += row.output_tokens;
-    bucket.cache_read_tokens += row.cache_read_tokens;
-    bucket.cache_write_tokens += row.cache_write_tokens;
-    bucket.events += 1;
-    bucket.sessions.add(row.session_id);
-    byDay.set(day, bucket);
-  }
+  const byDay = bucketFacts(rows, (row) => localDay(row.occurred_at, timeZone));
 
   const days = [...byDay.keys()].sort();
   const startDay = options.from ?? days[0] ?? null;
@@ -262,20 +355,10 @@ export const getDailyCost = (db, options = {}) => {
   const points = [];
 
   if (startDay && endDay) {
+    // Zero-fill the whole range: a day that spent nothing is a fact about this machine, not
+    // a gap, and a chart that hides it reads as an outage.
     for (const day of dayRange(startDay, endDay)) {
-      const bucket = byDay.get(day);
-      points.push({
-        day,
-        ...money(bucket?.cost_micros ?? 0),
-        costBreakdown: costBreakdown(bucket ?? NO_COST_PARTS),
-        totalTokens: bucket?.total_tokens ?? 0,
-        inputTokens: bucket?.input_tokens ?? 0,
-        outputTokens: bucket?.output_tokens ?? 0,
-        cacheReadTokens: bucket?.cache_read_tokens ?? 0,
-        cacheWriteTokens: bucket?.cache_write_tokens ?? 0,
-        events: bucket?.events ?? 0,
-        sessions: bucket ? bucket.sessions.size : 0,
-      });
+      points.push({ day, ...pointFromBucket(byDay.get(day)) });
     }
   }
 
@@ -291,8 +374,7 @@ export const getDailyCost = (db, options = {}) => {
         endDay ? new Date(localDayStart(endDay, timeZone)) : new Date(),
       ),
     },
-    totalCostMicros: points.reduce((sum, point) => sum + point.costMicros, 0),
-    totalCostUsd: formatUsd(points.reduce((sum, point) => sum + point.costMicros, 0)),
+    ...pointsTotal(points),
     points,
   };
 };
@@ -332,34 +414,14 @@ const dayRange = (fromDay, toDay) => {
 export const getHourlyCost = (db, options = {}) => {
   const timeZone = options.timeZone ?? null;
 
-  const filters = [
-    "u.occurred_at >= @start",
-    "u.occurred_at < @end",
-  ];
-  const params = {
-    start: localDayStart(options.day, timeZone),
-    end: localDayStart(nextDayString(options.day), timeZone),
-  };
-
-  if (options.cwd) {
-    filters.push("s.cwd = @cwd");
-    params.cwd = options.cwd;
-  }
-  if (options.provider) {
-    filters.push("u.provider = @provider");
-    params.provider = options.provider;
-  }
-  if (options.includeSubagents === false) {
-    filters.push("s.parent_session_id IS NULL");
-  }
+  // The drill-down is one day, so the same string bounds both ends: the instant the day
+  // began, and the instant the next one began.
+  const { filters, params } = usageFilters({ ...options, from: options.day, to: options.day }, timeZone);
   const whereClause = `WHERE ${filters.join(" AND ")}`;
 
   const rows = db
     .prepare(
-      `SELECT u.occurred_at, u.session_id, u.cost_micros, u.total_tokens,
-              u.cost_input_micros, u.cost_output_micros, u.cost_cache_read_micros,
-              u.cost_cache_write_micros,
-              u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens
+      `SELECT ${FACT_COLUMNS}
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
        ${whereClause}
@@ -367,55 +429,12 @@ export const getHourlyCost = (db, options = {}) => {
     )
     .all(params);
 
-  const byHour = new Map();
-  for (const row of rows) {
-    const hour = localHour(row.occurred_at, timeZone);
-    const bucket = byHour.get(hour) ?? {
-      cost_micros: 0,
-      cost_input_micros: 0,
-      cost_output_micros: 0,
-      cost_cache_read_micros: 0,
-      cost_cache_write_micros: 0,
-      total_tokens: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_tokens: 0,
-      cache_write_tokens: 0,
-      events: 0,
-      sessions: new Set(),
-    };
-    bucket.cost_micros += row.cost_micros;
-    bucket.cost_input_micros += row.cost_input_micros;
-    bucket.cost_output_micros += row.cost_output_micros;
-    bucket.cost_cache_read_micros += row.cost_cache_read_micros;
-    bucket.cost_cache_write_micros += row.cost_cache_write_micros;
-    bucket.total_tokens += row.total_tokens;
-    bucket.input_tokens += row.input_tokens;
-    bucket.output_tokens += row.output_tokens;
-    bucket.cache_read_tokens += row.cache_read_tokens;
-    bucket.cache_write_tokens += row.cache_write_tokens;
-    bucket.events += 1;
-    bucket.sessions.add(row.session_id);
-    byHour.set(hour, bucket);
-  }
+  const byHour = bucketFacts(rows, (row) => localHour(row.occurred_at, timeZone));
 
   // 24 fixed labels for the local day, so idle hours are visible.
   const points = Array.from({ length: 24 }, (_, index) => {
     const hour = `${options.day} ${String(index).padStart(2, "0")}:00`;
-    const bucket = byHour.get(hour);
-    return {
-      hour,
-      label: hour.slice(11, 16),
-      ...money(bucket?.cost_micros ?? 0),
-      costBreakdown: costBreakdown(bucket ?? NO_COST_PARTS),
-      totalTokens: bucket?.total_tokens ?? 0,
-      inputTokens: bucket?.input_tokens ?? 0,
-      outputTokens: bucket?.output_tokens ?? 0,
-      cacheReadTokens: bucket?.cache_read_tokens ?? 0,
-      cacheWriteTokens: bucket?.cache_write_tokens ?? 0,
-      events: bucket?.events ?? 0,
-      sessions: bucket ? bucket.sessions.size : 0,
-    };
+    return { hour, label: hour.slice(11, 16), ...pointFromBucket(byHour.get(hour)) };
   });
 
   return {
@@ -426,8 +445,7 @@ export const getHourlyCost = (db, options = {}) => {
       timeZone: timeZone ?? "UTC",
       offsetLabel: offsetLabel(timeZone, new Date(localDayStart(options.day, timeZone))),
     },
-    totalCostMicros: points.reduce((sum, point) => sum + point.costMicros, 0),
-    totalCostUsd: formatUsd(points.reduce((sum, point) => sum + point.costMicros, 0)),
+    ...pointsTotal(points),
     points,
   };
 };
@@ -465,7 +483,7 @@ export const getSessions = (db, options = {}) => {
   if (options.includeSubagents === false) {
     filters.push("s.parent_session_id IS NULL");
   }
-  const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+  const whereClause = whereFrom(filters);
   const orderBy = options.sort === "cost" ? "cost_micros DESC" : "last_activity_at DESC";
 
   const total = db
@@ -691,27 +709,8 @@ export const getFlows = (db, options = {}) => {
   const nodeLimit = clampNodeLimit(options.nodeLimit);
 
   // Bounds are local days converted to UTC instants, exactly as the daily chart does them.
-  const filters = [];
-  const params = {};
-  if (options.from) {
-    filters.push("u.occurred_at >= @start");
-    params.start = localDayStart(options.from, options.timeZone ?? null);
-  }
-  if (options.to) {
-    filters.push("u.occurred_at < @end");
-    params.end = localDayStart(nextDayString(options.to), options.timeZone ?? null);
-  }
-  if (options.cwd) {
-    filters.push("s.cwd = @cwd");
-    params.cwd = options.cwd;
-  }
-  if (options.provider) {
-    filters.push("u.provider = @provider");
-    params.provider = options.provider;
-  }
-  if (options.includeSubagents === false) {
-    filters.push("s.parent_session_id IS NULL");
-  }
+  const { filters, params } = usageFilters(options, options.timeZone ?? null);
+  const whereClause = whereFrom(filters);
 
   const pairs = db
     .prepare(
@@ -726,7 +725,7 @@ export const getFlows = (db, options = {}) => {
               COUNT(DISTINCT u.session_id)            AS sessions
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
-       ${filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : ""}
+       ${whereClause}
        GROUP BY u.provider, u.model_id, s.cwd
        ORDER BY ${metric === "cost" ? "cost_micros" : "total_tokens"} DESC`,
     )
@@ -918,7 +917,7 @@ export const getFlows = (db, options = {}) => {
         .prepare(
           `SELECT COUNT(DISTINCT s.session_id) AS n
            FROM usage_events u JOIN sessions s ON s.session_id = u.session_id
-           ${filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : ""}`,
+           ${whereClause}`,
         )
         .get(params).n,
       models: rankedModels.length,
