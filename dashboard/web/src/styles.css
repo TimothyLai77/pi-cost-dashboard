@@ -18,15 +18,16 @@
   --volume: #b3bec8;
   --live: #0e6e8c;
 
-  /* A stacked cost bar's four segments. Warm amber is what the page already means by
-     money, so the two parts you pay for per token of text stay amber; the two cache parts
-     take the cool accent, because cache is the machine re-reading and rewriting its own
-     context. Every value clears 3:1 against the paper it is drawn on, the same bar the rest
-     of the chart colors were picked by. */
+  /* A stacked cost bar's four segments. Warm means text you pay for per token, cool means
+     the machine's own context traffic — that split is the page's existing color language.
+     Inside each pair the hues are far apart, not just lightness: completion is burnt orange,
+     prompt is mustard gold, cache reads are blue, cache writes are teal. Two steels and two
+     amplitudes of the same amber read as one color in a four-wide stack, so every part gets
+     its own hue. All four clear 3.8:1 on the panel and 4.5:1 on paper. */
   --cost-output: #a6541f;
-  --cost-input: #c4763a;
-  --cost-cache-read: #4f6b83;
-  --cost-cache-write: #7d8ea0;
+  --cost-input: #91702e;
+  --cost-cache-read: #3d6d97;
+  --cost-cache-write: #3f7f70;
 
   /* The masthead's 2px ledger rule. Its own token because the color that reads as a
      confident ink rule on paper becomes a glaring lit line on a dark surface. */
@@ -70,12 +71,12 @@
   --volume: #4b5a68;
   --live: #b98fd9;
 
-  /* Lifted for the dark slate, keeping the warm/cool split and the 3:1 floor against the
-     panel. The amber steps go lighter as the stack goes down; the steel steps do the same. */
+  /* The same four hues lifted for the dark slate: same hue for each part, brighter so the
+     stack clears 5.6:1 against the panel instead of dissolving into it. */
   --cost-output: #e0873d;
-  --cost-input: #eb9f5f;
-  --cost-cache-read: #7fa4c4;
-  --cost-cache-write: #a8c1d6;
+  --cost-input: #c3a24b;
+  --cost-cache-read: #7fa7cc;
+  --cost-cache-write: #5fa896;
 
   /* Softened to silver. Full ink on dark slate is 14.8:1 and reads as a lit line; the
      ledger's rule should be the strongest line on the page, not the brightest. */
@@ -600,10 +601,20 @@ button.ghost {
   margin-left: var(--space-2);
 }
 
+/* A chart tooltip. Not the status pill: a tooltip is a block of five stacked lines, and the
+   pill's 10px side padding and 999px radius leave the text touching the border. */
+.chart-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: 24rem;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-sm);
+}
+
 /* The token line in a chart tooltip, broken out by kind. */
 .tooltip-breakdown {
   display: block;
-  margin-top: var(--space-1);
   font-size: 0.6875rem;
   color: var(--ink-faint);
 }
@@ -612,7 +623,6 @@ button.ghost {
    the reader is hovering is money and the volume band is context. */
 .tooltip-money {
   display: block;
-  margin-top: var(--space-1);
   font-size: 0.6875rem;
   color: var(--ink-soft);
 }
@@ -693,6 +703,13 @@ button.ghost {
   /* Keep the total on narrow screens and drop the breakdown to the tooltip. */
   .sessions .token-kinds {
     display: none;
+  }
+
+  /* A tooltip on a phone is as wide as the chart it came from, so cap it by the chart and
+     take back the wide side gutters. */
+  .chart-tooltip {
+    max-width: 100%;
+    padding: var(--space-3) var(--space-4);
   }
 }
 

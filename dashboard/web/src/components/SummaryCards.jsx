@@ -37,9 +37,9 @@ const tokenKinds = (window) =>
  * window with no data at all.
  *
  * @param {{ costBreakdown?: { input?: object, output?: object, cacheRead?: object, cacheWrite?: object } }} [window]
- * @returns {{ text: string, title: string } | null} text like
- *   "out $4.10 · in $2.30 · cache read $0.02 · cache write $0.00", and a title carrying the
- *   same four figures as exact micro-dollars; null when the response has no breakdown at all
+ * @returns {{ parts: { label: string, costUsd: string, color: string }[], title: string } | null}
+ *   the four parts in bar order, each with the hue its bar segment uses, and a title carrying
+ *   the same figures as exact micro-dollars; null when the response has no breakdown at all
  */
 const costParts = (window) => {
   // A server older than contract version 2 has no split to report. Four $0.00 parts under a
@@ -47,14 +47,15 @@ const costParts = (window) => {
   // until the server is updated.
   if (!window?.costBreakdown) return null;
 
-  const parts = COST_PARTS.map(({ key, label }) => ({
+  const parts = COST_PARTS.map(({ key, label, color }) => ({
     label,
+    color,
     costUsd: window.costBreakdown[key]?.costUsd ?? "$0.00",
     costMicros: window.costBreakdown[key]?.costMicros ?? 0,
   }));
 
   return {
-    text: parts.map((part) => `${part.label} ${part.costUsd}`).join(" · "),
+    parts,
     // Each part is rounded for display, so the four can add up to a cent away from the
     // window's total. The exact figures are one hover away.
     title: parts.map((part) => `${part.label} ${part.costMicros.toLocaleString("en-US")} micro-dollars`).join(" · "),
@@ -72,7 +73,16 @@ const SummaryCell = ({ label, costUsd, window }) => {
     <div className="summary-cell">
       <span className="eyebrow">{label}</span>
       <span className="value">{costUsd}</span>
-      {parts ? <span className="sub-cost numeral" title={parts.title}>{parts.text}</span> : null}
+      {parts ? (
+        <span className="sub-cost numeral" title={parts.title}>
+          {parts.parts.map((part, index) => (
+            <span key={part.label} style={{ color: part.color }}>
+              {index > 0 ? " · " : ""}
+              {part.label} {part.costUsd}
+            </span>
+          ))}
+        </span>
+      ) : null}
       <span
         className="sub numeral"
         title={`${kinds} · ${window?.sessions ?? 0} session(s), ${window?.events ?? 0} model call(s)`}

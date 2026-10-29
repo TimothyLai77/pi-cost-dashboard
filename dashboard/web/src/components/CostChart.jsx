@@ -8,9 +8,11 @@
  * the context, and a day with real usage and no bill is legible as what it is.
  *
  * Each cost bar is stacked in the four parts the provider billed it in, so a bar answers
- * "what was that day's money" as well as "how much". Warm amber segments are completion and
- * prompt tokens, cool steel segments are cache. The bar carries hairline gaps between
- * segments, so the stack reads as ledger bands rather than a blended gradient.
+ * "what was that day's money" as well as "how much". The four parts get four hues, not a
+ * lightness ramp: burnt orange for completion tokens, mustard gold for prompt tokens, blue for
+ * cache reads, teal for cache writes. Warm is text you pay for, cool is the machine's own
+ * context traffic. The bar carries hairline gaps between segments, so the stack reads as
+ * ledger bands rather than a blended gradient.
  *
  * The chart prints no caption under itself. What the token figures include is stated in the
  * summary strip footer and in the legend, which is where a reader looks before parsing a
@@ -45,7 +47,10 @@ const DayTooltip = ({ active, payload }) => {
   if (!active || !point) return null;
   const money = moneyBreakdown(point);
   return (
-    <div className="state" style={{ border: "1px solid var(--rule-strong)", background: "var(--paper-raised)" }}>
+    <div
+      className="chart-tooltip"
+      style={{ border: "1px solid var(--rule-strong)", background: "var(--paper-raised)" }}
+    >
       <span className="eyebrow">{point.day}</span>
       <div className="numeral">{formatCost(point.costMicros, point.costMicros > 0 && point.costMicros < 10000 ? 4 : 2)}</div>
       {money ? <div className="numeral tooltip-money">{money}</div> : null}

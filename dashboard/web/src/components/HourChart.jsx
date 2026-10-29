@@ -41,7 +41,10 @@ const HourTooltip = ({ active, payload }) => {
   if (!active || !point) return null;
   const money = moneyBreakdown(point);
   return (
-    <div className="state" style={{ border: "1px solid var(--rule-strong)", background: "var(--paper-raised)" }}>
+    <div
+      className="chart-tooltip"
+      style={{ border: "1px solid var(--rule-strong)", background: "var(--paper-raised)" }}
+    >
       <span className="eyebrow">
         {point.day} · {point.label}
       </span>
