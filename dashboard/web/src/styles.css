@@ -225,14 +225,6 @@ body {
   border: 1px solid var(--rule);
 }
 
-/* Says what the token figures mean: the totals include cache reads, which dwarf the rest. */
-.summary-note {
-  margin: var(--space-2) 0 0;
-  color: var(--ink-faint);
-  font-size: 0.6875rem;
-  max-width: 60rem;
-}
-
 .summary-cell {
   background: var(--paper-raised);
   padding: var(--space-3) var(--space-4);
@@ -599,10 +591,6 @@ button.ghost {
   border-top: 1px solid var(--rule);
   font-size: 0.75rem;
   color: var(--ink-faint);
-}
-
-.footer .live-tag {
-  margin: 0 var(--space-1);
 }
 
 /* A refresh is shown as a word, not a layout change. */

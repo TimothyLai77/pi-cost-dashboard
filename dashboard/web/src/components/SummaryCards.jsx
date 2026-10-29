@@ -75,10 +75,6 @@ export const SummaryCards = ({ summary, loading }) => {
           );
         })}
       </div>
-      <p className="summary-note">
-        Tokens are input + output + cache reads + cache writes. Cache reads are counted again
-        on every model call, so a long session's token total is throughput, not its size.
-      </p>
     </section>
   );
 };

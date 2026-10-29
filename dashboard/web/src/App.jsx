@@ -192,11 +192,6 @@ export const App = () => {
               {health.data.sessionCount} sessions · {health.data.usageEventCount} usage records
               {health.data.lastScanAt
                 ? ` · last scan ${health.data.lastScanAt.replace("T", " ").replace("Z", " UTC")}`
-                : " · fed by session reports, nothing scanned from disk"}
-              {" · "}
-              rows marked live are self-reported by a session active in the last 15 minutes
-              {config.data
-                ? ` · days and hours are ${config.data.timezone} (${config.data.offsetLabel})`
                 : ""}
             </p>
           )}
@@ -390,10 +385,6 @@ export const App = () => {
                 ? `Updated ${updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
                 : "Not updated yet"}{" · "}
               refreshes every {Math.round(REFRESH_INTERVAL_MS / 1000)}s
-            </span>
-            <span>
-              Running sessions self-report; the rest is read from session files. A row marked{" "}
-              <span className="live-tag">live</span> is a session still writing its file.
             </span>
           </footer>
         </>
