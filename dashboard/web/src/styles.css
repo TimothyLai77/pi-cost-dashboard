@@ -468,6 +468,63 @@ button.ghost {
   opacity: 0.75;
 }
 
+/* The daily and hourly charts live in one grid cell on top of each other, so the frame is as
+   tall as the taller chart and swapping between them moves nothing: the panel, the table under
+   it, and the page height all stay put. Only opacity animates. */
+.chart-stack {
+  display: grid;
+  position: relative;
+}
+
+.chart-layer {
+  grid-area: 1 / 1;
+  opacity: 1;
+  transition: opacity 220ms ease-out;
+}
+
+/* A chart that is arriving is inserted into the frame, and a transition cannot animate an
+   element's first paint. A mount animation can, so the incoming chart fades in while the
+   outgoing one fades out. */
+.chart-layer[aria-hidden="false"] {
+  animation: chart-layer-in 220ms ease-out;
+}
+
+@keyframes chart-layer-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A faded chart keeps its measured size (that is the point of the frame), so it has to stop
+   answering the pointer: an invisible chart that still took clicks would open a day nobody
+   aimed at. Screen readers skip it for the same reason. */
+.chart-layer[aria-hidden="true"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The drill-down notice goes over the chart already on screen instead of replacing it. */
+.chart-loading-pill {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--rule-strong);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  font-family: var(--font-numeral);
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
 .legend-hint {
   font-family: var(--font-numeral);
   font-size: 0.6875rem;

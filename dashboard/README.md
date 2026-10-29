@@ -126,6 +126,7 @@ dashboard/
         ├── main.jsx
         ├── App.jsx
         ├── api.js
+        ├── hourly.js       # drill-down cache: hover prefetch, keyed by day + filters
         ├── theme.js        # Auto / Light / Dark, persisted, follows the system in Auto
         ├── styles.css
         └── components/
@@ -252,6 +253,12 @@ tokens, and each rollup against both its own facts and the session file it came 
 
 ## Notes from building this
 
+- **Chart swaps fade, they do not swap.** The daily and hourly charts are layers in one grid
+   cell, so the panel is always the same height; the drill-down fades over ~250 ms with the
+   daily chart staying under it, and a "hours…" pill covers the wait. `web/src/hourly.js`
+   caches the hourly payload per day plus filters, hover prefetches the bar you are pointing
+   at, and the five most recent days are warmed when the daily series arrives, so a click on a
+   cached day costs no request.
 - **Warm scans are fast.** 21 ms for 265 sessions with the cache; 738 ms cold.
 - **Zero-cost days are real.** Most usage here is local models with no catalog price, so
   the chart draws token volume as a background band under the cost bars rather than

@@ -8,9 +8,10 @@ const SUBAGENTS_STORAGE_KEY = "pi-cost-subagents";
  * bounds and the server returns the full recorded history.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useApi } from "./api.js";
+import { useHourlyDrill } from "./hourly.js";
 import { PREFERENCES, useTheme } from "./theme.js";
 import { CostChart } from "./components/CostChart.jsx";
 import { FlowsChart } from "./components/FlowsChart.jsx";
@@ -138,15 +139,24 @@ export const App = () => {
     _k: refreshKey,
   });
 
-  // Null path means the hook fetches nothing, so the hourly request costs nothing while
-  // the daily view is up.
-  const hourly = useApi(drillDay ? "/api/hourly" : null, {
-    day: drillDay ?? "",
+  // Hourly data for the drilled day, with prefetch so a click is usually served from the
+  // cache. The daily chart stays on screen while an uncached day arrives, so nothing has to
+  // leave the panel to make room for a loading line.
+  const hourly = useHourlyDrill(drillDay, {
     cwd: project,
     provider,
     subagents,
     _k: refreshKey,
   });
+
+  // Warm the most recent days as soon as the daily series is known. They are the days a
+  // reader is most likely to click, and the cache is rebuilt with the filters, so this is
+  // a handful of indexed queries per refresh, not a growing backlog.
+  useEffect(() => {
+    const points = chart.data?.points ?? [];
+    if (points.length === 0) return;
+    hourly.prefetchMany(points.slice(-5).map((point) => point.day));
+  }, [chart.data, hourly.prefetchMany]);
 
   const health = useApi("/api/health", { _k: refreshKey });
 
@@ -179,6 +189,29 @@ export const App = () => {
   );
   const refreshing = [summary, chart, models, sessions, filters].some((request) => request.refreshing);
   const loading = [summary, chart, models, sessions].some((request) => request.loading);
+
+  // Which chart sits on top of the stack. It follows the data actually on screen, not the
+  // clicked day: while a new day is on its way, the daily chart stays where it is with the
+  // loading pill over it, and a stale day's bars are never shown under the other day's title.
+  const showHours = Boolean(hourly.data) && hourly.data.day === drillDay;
+  const view = showHours ? "hour" : "day";
+  const waitingForHours = Boolean(drillDay) && !showHours && (hourly.loading || hourly.refreshing);
+
+  // Bars animate when a series is new to the panel and stay still when the 30s refresh
+  // returns the same series with newer numbers. Re-animating on every refresh is the kind of
+  // flashing this panel is meant to get rid of.
+  const dailySeriesKey = `${range.days}|${project}|${provider}|${subagents}`;
+  const lastDailyKey = useRef(null);
+  const dailyAnimate = lastDailyKey.current !== dailySeriesKey;
+  useEffect(() => {
+    lastDailyKey.current = dailySeriesKey;
+  }, [dailySeriesKey]);
+
+  const lastHourDay = useRef(null);
+  const hourlyAnimate = Boolean(hourly.data) && lastHourDay.current !== hourly.data.day;
+  useEffect(() => {
+    if (hourly.data) lastHourDay.current = hourly.data.day;
+  }, [hourly.data]);
 
   const changeRange = (index) => {
     setRangeIndex(index);
@@ -338,29 +371,63 @@ export const App = () => {
               </div>
             }
           >
-            {!drillDay && chart.loading && <div className="state">Loading chart…</div>}
-            {!drillDay && !chart.loading && chart.data?.points?.length > 0 && (
-              <CostChart points={chart.data.points} range={chart.data.range} onSelectDay={setDrillDay} />
-            )}
-            {!drillDay && !chart.loading && chart.data?.points?.length === 0 && (
-              <div className="state">
-                No sessions match these filters in this range. Widen the range, or choose
-                “All projects”.
-              </div>
-            )}
+            {/* One frame, both charts stacked in the same grid cell. The chart that is not on
+                top stays mounted and fades, so the panel keeps one height: the height change
+                was the flash. */}
+            <div className="chart-stack" data-view={view}>
+              {chart.data?.points?.length > 0 && (
+                <div className="chart-layer" data-layer="day" aria-hidden={view !== "day"}>
+                  <CostChart
+                    points={chart.data.points}
+                    range={chart.data.range}
+                    onSelectDay={setDrillDay}
+                    onHoverDay={hourly.prefetch}
+                    animateBars={dailyAnimate}
+                  />
+                </div>
+              )}
 
-            {drillDay && hourly.loading && <div className="state">Loading hours…</div>}
-            {drillDay && !hourly.loading && hourly.error && (
-              <div className="state state-error">{hourly.error}</div>
-            )}
-            {drillDay && !hourly.loading && hourly.data && (
-              <HourChart
-                points={hourly.data.points}
-                day={hourly.data.day}
-                timeZone={hourly.data.range?.timeZone}
-                offsetLabel={hourly.data.range?.offsetLabel}
-              />
-            )}
+              {hourly.data && (
+                <div className="chart-layer" data-layer="hour" aria-hidden={view !== "hour"}>
+                  <HourChart
+                    points={hourly.data.points}
+                    day={hourly.data.day}
+                    timeZone={hourly.data.range?.timeZone}
+                    offsetLabel={hourly.data.range?.offsetLabel}
+                    animateBars={hourlyAnimate}
+                  />
+                </div>
+              )}
+
+              {!drillDay && chart.loading && (
+                <div className="chart-layer" data-layer="state">
+                  <div className="state">Loading chart…</div>
+                </div>
+              )}
+
+              {!chart.loading && chart.data?.points?.length === 0 && (
+                <div className="chart-layer" data-layer="state">
+                  <div className="state">
+                    No sessions match these filters in this range. Widen the range, or choose
+                    “All projects”.
+                  </div>
+                </div>
+              )}
+
+              {drillDay && hourly.error && (
+                <div className="chart-layer" data-layer="state">
+                  <div className="state state-error">{hourly.error}</div>
+                </div>
+              )}
+
+              {/* The pill sits over the chart already on screen; it replaces nothing. */}
+              {waitingForHours && (
+                <span className="chart-loading-pill" role="status">
+                  <span className="refresh-dot" data-active="true" aria-hidden="true" />
+                  hours…
+                </span>
+              )}
+            </div>
           </Panel>
 
           <Panel

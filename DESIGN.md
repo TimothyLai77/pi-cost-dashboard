@@ -1016,6 +1016,38 @@ and why `web/test/theme.test.js` pins `resolveMode` and the storage fallbacks.
 Every color in the app already came from tokens, including the chart's strokes and fills,
 so the dark palette is additive: one block of variable overrides, nothing component-level.
 
+### The day drill-down: cross-fade, not swap
+
+Clicking a day bar shows that day's 24 hours. The first version unmounted the daily chart,
+put a one-line "Loading hours…" block in its place, and mounted the hourly chart when the
+response landed: the panel went 300 px → 40 px → 290 px in three frames, which reads as a
+flash and shoves every panel below it up and back down.
+
+The frame is now a CSS grid with one cell (`grid-area: 1 / 1`), and both charts are layers in
+it. A layer that is not on top is `opacity: 0` with `pointer-events: none` and `aria-hidden`,
+so it keeps its measured size, takes no clicks, and is skipped by screen readers; the frame is
+as tall as the taller chart at all times. The outgoing layer fades out on a transition; the
+incoming one fades in on a mount animation, because a transition cannot animate an element's
+first paint. Bars animate (350 ms) only when a series is new to the panel — keyed on range plus
+filters for the daily chart and on the drilled day for the hourly one — so the 30 s refresh
+updates numbers without re-running any animation.
+
+While a day's data is on its way, the chart already on screen stays at full opacity with a
+small "hours…" pill over it. The pill replaces nothing, so nothing moves.
+
+`web/src/hourly.js` holds a keyed promise cache for the drill data: hover prefetches the
+hovered bar's day, the five most recent days in the range are prefetched when the daily series
+arrives, and a click on a cached day swaps with no request at all. The key includes the day and
+every filter plus the refresh tick, so a cached day can never be served under a different
+project, provider, subagent setting, or refresh. Entries are capped at 64 with
+least-recently-used eviction, a failed entry is dropped so the next attempt asks again, and a
+click on a day whose prefetch is in flight reuses that request instead of adding a second one.
+
+Measured on the built app with recorded API payloads: panel 444 px, chart frame 350 px, page
+1950 px across every frame of a click, from the click through the fade, with a cold day served
+in ~6.2 s (daily chart visible with the pill the whole time, then the fade) and a cached day
+fading over ~250 ms with no request at all.
+
 ---
 
 ## 11. Repository layout

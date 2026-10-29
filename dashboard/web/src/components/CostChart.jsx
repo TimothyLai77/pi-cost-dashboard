@@ -70,10 +70,10 @@ const DayTooltip = ({ active, payload }) => {
 };
 
 /**
- * @param {{ points: { day: string, costMicros: number, totalTokens: number, sessions: number }[], range: object, onSelectDay?: (day: string) => void }} props
+ * @param {{ points: { day: string, costMicros: number, totalTokens: number, sessions: number }[], range: object, onSelectDay?: (day: string) => void, onHoverDay?: (day: string) => void, animateBars?: boolean }} props
  * @returns {JSX.Element}
  */
-export const CostChart = ({ points, range, onSelectDay }) => {
+export const CostChart = ({ points, range, onSelectDay, onHoverDay, animateBars = false }) => {
   const busiestDay = points.reduce((max, point) => Math.max(max, point.totalTokens), 0);
 
   return (
@@ -103,7 +103,20 @@ export const CostChart = ({ points, range, onSelectDay }) => {
 
       <div style={{ height: "20rem" }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={points} margin={{ top: 12, right: 8, bottom: 4, left: 8 }}>
+          <ComposedChart
+            data={points}
+            margin={{ top: 12, right: 8, bottom: 4, left: 8 }}
+            // Hovering a bar starts that day's hourly request. By the time the click lands the
+            // answer is usually already in the cache, so the drill-down swaps with no wait.
+            onMouseMove={
+              onHoverDay
+                ? (state) => {
+                    const day = state?.activeLabel;
+                    if (day) onHoverDay(day);
+                  }
+                : undefined
+            }
+          >
             <CartesianGrid stroke="var(--rule)" strokeDasharray="0" vertical={false} />
             <XAxis
               dataKey="day"
@@ -147,7 +160,8 @@ export const CostChart = ({ points, range, onSelectDay }) => {
                 stroke="var(--paper-raised)"
                 strokeWidth={1}
                 maxBarSize={14}
-                isAnimationActive={false}
+                isAnimationActive={animateBars}
+                animationDuration={350}
                 className={onSelectDay ? "bar-clickable" : undefined}
                 onClick={
                   onSelectDay

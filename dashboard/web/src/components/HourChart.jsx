@@ -64,10 +64,10 @@ const HourTooltip = ({ active, payload }) => {
 };
 
 /**
- * @param {{ points: { hour: string, label: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[], day: string, timeZone?: string, offsetLabel?: string }} props
+ * @param {{ points: { hour: string, label: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[], day: string, timeZone?: string, offsetLabel?: string, animateBars?: boolean }} props
  * @returns {JSX.Element}
  */
-export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC" }) => {
+export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC", animateBars = false }) => {
   const busiestHour = points.reduce((max, point) => Math.max(max, point.totalTokens), 0);
   const zone = `${timeZone} ${offsetLabel}`;
 
@@ -130,7 +130,8 @@ export const HourChart = ({ points, day, timeZone = "UTC", offsetLabel = "UTC" }
                 stroke="var(--paper-raised)"
                 strokeWidth={1}
                 maxBarSize={10}
-                isAnimationActive={false}
+                isAnimationActive={animateBars}
+                animationDuration={350}
               />
             ))}
           </ComposedChart>
