@@ -403,7 +403,7 @@ export const App = () => {
             actions={
               <span className="eyebrow">
                 {sessions.data
-                  ? `${sessions.data.total} shown of ${sessions.data.totalMatches} sessions · newest activity first`
+                  ? `${sessions.data.total} session${sessions.data.total === 1 ? "" : "s"} match · newest activity first`
                   : "newest activity first"}
               </span>
             }
