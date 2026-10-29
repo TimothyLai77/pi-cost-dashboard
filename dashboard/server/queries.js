@@ -4,6 +4,11 @@
  * Every money value leaves this layer as `costMicros` (integer micro-US dollars) plus a
  * formatted `costUsd` string, so the UI never sums raw floats.
  *
+ * Cost is also reported in the four parts Pi bills it in — prompt tokens, completion
+ * tokens, cached tokens re-read, cached tokens written. Those travel next to the total as
+ * `costBreakdown`, each part shaped with the same micro-dollar and string pair, so a chart
+ * can split a bar and a summary cell can say where the money went without adding floats.
+ *
  * Stored timestamps are UTC. Day and hour bucketing is a display decision, so it happens
  * here in JavaScript through `Intl` (see timezone.js) rather than in SQL with a fixed
  * minute offset: a fixed offset is only correct while daylight time does not change inside
@@ -26,6 +31,35 @@ export const MAX_PAGE_SIZE = 200;
  * @returns {{ costMicros: number, costUsd: string }}
  */
 const money = (costMicros) => ({ costMicros: costMicros ?? 0, costUsd: formatUsd(costMicros ?? 0) });
+
+/**
+ * A row with no spend in it, for a bucket that has no facts behind it.
+ * @type {{ cost_input_micros: number, cost_output_micros: number, cost_cache_read_micros: number, cost_cache_write_micros: number }}
+ */
+const NO_COST_PARTS = {
+  cost_input_micros: 0,
+  cost_output_micros: 0,
+  cost_cache_read_micros: 0,
+  cost_cache_write_micros: 0,
+};
+
+/**
+ * Shape the four parts of a bill the way the totals are shaped.
+ *
+ * The parts come straight from the stored columns, which came from Pi's `usage.cost`, so
+ * this adds nothing up: it names the four and formats each for display.
+ *
+ * @param {object} row Query row carrying cost_input_micros, cost_output_micros,
+ *   cost_cache_read_micros and cost_cache_write_micros; missing columns read as zero
+ * @returns {{ input: object, output: object, cacheRead: object, cacheWrite: object }}
+ *   Each value is a `{ costMicros, costUsd }` pair
+ */
+const costBreakdown = (row) => ({
+  input: money(row.cost_input_micros),
+  output: money(row.cost_output_micros),
+  cacheRead: money(row.cost_cache_read_micros),
+  cacheWrite: money(row.cost_cache_write_micros),
+});
 
 /**
  * Clamp a requested page size.
@@ -76,6 +110,9 @@ const subagentCondition = (includeSubagents = true) =>
  * every model call - so a 77M figure is throughput across hundreds of calls, not the size
  * of a conversation.
  *
+ * Cost is broken out the same way, in money rather than tokens: `costBreakdown` says what
+ * the window's spend bought — prompt tokens, completion tokens, cache reads, cache writes.
+ *
  * @param {import("better-sqlite3").Database} db
  * @param {number | null} [days] Window length in days, counted backwards from today; null means all time
  * @param {{ includeSubagents?: boolean, timeZone?: string | null }} [options]
@@ -104,6 +141,10 @@ export const getSummary = (db, days = 7, options = {}) => {
     const row = db
       .prepare(
         `SELECT COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
+                COALESCE(SUM(u.cost_input_micros), 0) AS cost_input_micros,
+                COALESCE(SUM(u.cost_output_micros), 0) AS cost_output_micros,
+                COALESCE(SUM(u.cost_cache_read_micros), 0) AS cost_cache_read_micros,
+                COALESCE(SUM(u.cost_cache_write_micros), 0) AS cost_cache_write_micros,
                 COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
                 COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
                 COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
@@ -118,6 +159,7 @@ export const getSummary = (db, days = 7, options = {}) => {
       .get(params);
     return {
       ...money(row.cost_micros),
+      costBreakdown: costBreakdown(row),
       totalTokens: row.total_tokens,
       inputTokens: row.input_tokens,
       outputTokens: row.output_tokens,
@@ -146,7 +188,7 @@ export const getSummary = (db, days = 7, options = {}) => {
  *
  * @param {import("better-sqlite3").Database} db
  * @param {{ from?: string, to?: string, cwd?: string, provider?: string, includeSubagents?: boolean, timeZone?: string | null }} [options]
- * @returns {{ range: object, points: { day: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[] }}
+ * @returns {{ range: object, points: { day: string, costMicros: number, costUsd: string, costBreakdown: object, totalTokens: number, sessions: number }[] }}
  */
 export const getDailyCost = (db, options = {}) => {
   const timeZone = options.timeZone ?? null;
@@ -182,6 +224,8 @@ export const getDailyCost = (db, options = {}) => {
   const rows = db
     .prepare(
       `SELECT u.occurred_at, u.session_id, u.cost_micros, u.total_tokens,
+              u.cost_input_micros, u.cost_output_micros, u.cost_cache_read_micros,
+              u.cost_cache_write_micros,
               u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
@@ -195,6 +239,10 @@ export const getDailyCost = (db, options = {}) => {
     const day = localDay(row.occurred_at, timeZone);
     const bucket = byDay.get(day) ?? {
       cost_micros: 0,
+      cost_input_micros: 0,
+      cost_output_micros: 0,
+      cost_cache_read_micros: 0,
+      cost_cache_write_micros: 0,
       total_tokens: 0,
       input_tokens: 0,
       output_tokens: 0,
@@ -204,6 +252,10 @@ export const getDailyCost = (db, options = {}) => {
       sessions: new Set(),
     };
     bucket.cost_micros += row.cost_micros;
+    bucket.cost_input_micros += row.cost_input_micros;
+    bucket.cost_output_micros += row.cost_output_micros;
+    bucket.cost_cache_read_micros += row.cost_cache_read_micros;
+    bucket.cost_cache_write_micros += row.cost_cache_write_micros;
     bucket.total_tokens += row.total_tokens;
     bucket.input_tokens += row.input_tokens;
     bucket.output_tokens += row.output_tokens;
@@ -225,6 +277,7 @@ export const getDailyCost = (db, options = {}) => {
       points.push({
         day,
         ...money(bucket?.cost_micros ?? 0),
+        costBreakdown: costBreakdown(bucket ?? NO_COST_PARTS),
         totalTokens: bucket?.total_tokens ?? 0,
         inputTokens: bucket?.input_tokens ?? 0,
         outputTokens: bucket?.output_tokens ?? 0,
@@ -278,10 +331,13 @@ const dayRange = (fromDay, toDay) => {
  * the hours with spend reads as a claim that nothing happened in the gaps, and the whole
  * point of the hourly view is to say which hours were idle.
  *
+ * Each hour carries `costBreakdown`, so the drill-down can say what an hour's spend was
+ * made of, not only how much it was.
+ *
  * @param {import("better-sqlite3").Database} db
  * @param {{ day: string, cwd?: string, provider?: string, includeSubagents?: boolean, timeZone?: string | null }} options
  *   `day` is the YYYY-MM-DD value the daily chart showed, in the same zone frame
- * @returns {{ day: string, range: object, points: { hour: string, label: string, costMicros: number, costUsd: string, totalTokens: number, sessions: number }[] }}
+ * @returns {{ day: string, range: object, points: { hour: string, label: string, costMicros: number, costUsd: string, costBreakdown: object, totalTokens: number, sessions: number }[] }}
  */
 export const getHourlyCost = (db, options = {}) => {
   const timeZone = options.timeZone ?? null;
@@ -311,6 +367,8 @@ export const getHourlyCost = (db, options = {}) => {
   const rows = db
     .prepare(
       `SELECT u.occurred_at, u.session_id, u.cost_micros, u.total_tokens,
+              u.cost_input_micros, u.cost_output_micros, u.cost_cache_read_micros,
+              u.cost_cache_write_micros,
               u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens
        FROM usage_events u
        JOIN sessions s ON s.session_id = u.session_id
@@ -324,6 +382,10 @@ export const getHourlyCost = (db, options = {}) => {
     const hour = localHour(row.occurred_at, timeZone);
     const bucket = byHour.get(hour) ?? {
       cost_micros: 0,
+      cost_input_micros: 0,
+      cost_output_micros: 0,
+      cost_cache_read_micros: 0,
+      cost_cache_write_micros: 0,
       total_tokens: 0,
       input_tokens: 0,
       output_tokens: 0,
@@ -333,6 +395,10 @@ export const getHourlyCost = (db, options = {}) => {
       sessions: new Set(),
     };
     bucket.cost_micros += row.cost_micros;
+    bucket.cost_input_micros += row.cost_input_micros;
+    bucket.cost_output_micros += row.cost_output_micros;
+    bucket.cost_cache_read_micros += row.cost_cache_read_micros;
+    bucket.cost_cache_write_micros += row.cost_cache_write_micros;
     bucket.total_tokens += row.total_tokens;
     bucket.input_tokens += row.input_tokens;
     bucket.output_tokens += row.output_tokens;
@@ -351,6 +417,7 @@ export const getHourlyCost = (db, options = {}) => {
       hour,
       label: hour.slice(11, 16),
       ...money(bucket?.cost_micros ?? 0),
+      costBreakdown: costBreakdown(bucket ?? NO_COST_PARTS),
       totalTokens: bucket?.total_tokens ?? 0,
       inputTokens: bucket?.input_tokens ?? 0,
       outputTokens: bucket?.output_tokens ?? 0,

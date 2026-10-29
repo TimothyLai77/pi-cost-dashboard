@@ -137,7 +137,7 @@ dashboard/
 
 | Method | Path | Status |
 |---|---|---|
-| `GET` | `/api/summary?days=7` | today / 7d / 30d / all-time totals |
+| `GET` | `/api/summary?days=7` | today / 7d / 30d / all-time totals, with the cost split |
 | `GET` | `/api/daily?from&to&cwd&provider&subagents` | chart points, gap-filled |
 | `GET` | `/api/hourly?day&cwd&provider&subagents` | one day's 24 hours, zero-filled |
 | `GET` | `/api/sessions/:id` | one session with its usage facts |
@@ -152,6 +152,11 @@ Money is integer micro-US dollars (`costMicros`) plus a formatted `costUsd` stri
 Reads are open; the two POST routes require `x-pi-cost-token` when `PI_COST_TOKEN` is
 set. `npm start` binds `127.0.0.1`; the container binds `0.0.0.0` internally and the
 host-side `PI_COST_BIND` in `compose.yml` decides who can reach it.
+
+`/api/summary`, `/api/daily` and `/api/hourly` also carry `costBreakdown` next to every
+cost figure: `input`, `output`, `cacheRead` and `cacheWrite`, each a `{ costMicros, costUsd }`
+pair. Those are the four parts of the bill Pi reports, so the page can show what the money
+went to, not only how much it was. A bucket with no spend has four zero parts.
 
 Every aggregate also takes `subagents=1` (default, count nested sessions) or
 `subagents=0` (only what each session paid directly). A subagent is billed as its

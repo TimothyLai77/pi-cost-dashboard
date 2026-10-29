@@ -554,7 +554,7 @@ Server-side, in this order:
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/api/ingest` | Upsert a session snapshot |
-| `GET` | `/api/summary?days=7` | Totals for window: cost, tokens, sessions |
+| `GET` | `/api/summary?days=7` | Totals for window: cost, cost parts, tokens, sessions |
 | `GET` | `/api/summary` | All-time totals plus today, 7d, 30d |
 | `GET` | `/api/daily?from&to&cwd&provider` | Points for the chart, in `PI_COST_TZ` |
 | `GET` | `/api/hourly?day&cwd&provider` | One day's 24 hours, zero-filled, in `PI_COST_TZ` |
@@ -577,6 +577,29 @@ Server-side, in this order:
   ]
 }
 ```
+
+Money leaves the API in the four parts Pi bills it in (§4). `/api/summary`, `/api/daily`
+and `/api/hourly` carry a `costBreakdown` next to every cost figure:
+
+```json
+{
+  "day": "2026-10-20",
+  "costMicros": 2110000,
+  "costUsd": "$2.11",
+  "costBreakdown": {
+    "input":     { "costMicros": 340000, "costUsd": "$0.34" },
+    "output":    { "costMicros": 1760000, "costUsd": "$1.76" },
+    "cacheRead": { "costMicros": 10000, "costUsd": "$0.01" },
+    "cacheWrite": { "costMicros": 0, "costUsd": "$0.00" }
+  }
+}
+```
+
+Every part is a `{ costMicros, costUsd }` pair like the totals are, so a chart can split a
+bar and a summary cell can name where the money went without summing floats. A bucket with
+no spend has four zero parts, not a missing `costBreakdown`. The session list, session
+detail and model ledger do not carry it: the page shows the split in the summary strip and
+in the charts, and nothing in the page reads it from those three endpoints.
 
 Every aggregate accepts `subagents=1` (default, count nested subagent sessions)
 or `subagents=0` (count only what each session paid directly). Any other value is

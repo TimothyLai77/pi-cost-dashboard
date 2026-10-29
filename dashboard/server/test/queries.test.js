@@ -404,6 +404,67 @@ test("getSessions flags subagent rows and can drop them", () => {
   db.close();
 });
 
+test("summary, daily and hourly report the money in the four parts Pi bills", () => {
+  const db = seededDb();
+
+  // full-usage: 265 input, 485 output, 17900 cache read, 500 cache write on 2026-01-01,
+  // and 11/22/67/0 on 2026-01-02. usage-only bills its 100000 entirely as cache reads.
+  const summary = getSummary(db);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(summary.allTime.costBreakdown).map(([part, value]) => [part, value.costMicros]),
+    ),
+    { input: 276, output: 507, cacheRead: 117967, cacheWrite: 500 },
+  );
+  assert.equal(
+    Object.values(summary.allTime.costBreakdown).reduce((sum, part) => sum + part.costMicros, 0),
+    summary.allTime.costMicros,
+    "the parts add up to the reported total",
+  );
+  assert.equal(summary.allTime.costBreakdown.cacheRead.costUsd, "$0.12", "each part carries a display string");
+
+  const daily = getDailyCost(db, { from: "2026-01-01", to: "2026-01-04" }).points;
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(daily[0].costBreakdown).map(([part, value]) => [part, value.costMicros]),
+    ),
+    { input: 265, output: 485, cacheRead: 17900, cacheWrite: 500 },
+    "the first day's split",
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(daily[2].costBreakdown).map(([part, value]) => [part, value.costMicros]),
+    ),
+    { input: 0, output: 0, cacheRead: 100000, cacheWrite: 0 },
+    "a cache warm bills its money entirely as cache reads",
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(daily[3].costBreakdown).map(([part, value]) => [part, value.costUsd]),
+    ),
+    { input: "$0.00", output: "$0.00", cacheRead: "$0.00", cacheWrite: "$0.00" },
+    "a day with no spend has four zero parts, not a missing breakdown",
+  );
+
+  const hourly = getHourlyCost(db, { day: "2026-01-01" }).points;
+  const partsFromHours = hourly.reduce(
+    (totals, point) => ({
+      input: totals.input + point.costBreakdown.input.costMicros,
+      output: totals.output + point.costBreakdown.output.costMicros,
+      cacheRead: totals.cacheRead + point.costBreakdown.cacheRead.costMicros,
+      cacheWrite: totals.cacheWrite + point.costBreakdown.cacheWrite.costMicros,
+    }),
+    { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  );
+  assert.deepEqual(partsFromHours, { input: 265, output: 485, cacheRead: 17900, cacheWrite: 500 });
+  assert.equal(
+    Object.values(partsFromHours).reduce((sum, value) => sum + value, 0),
+    hourly.reduce((sum, point) => sum + point.costMicros, 0),
+    "the hours' parts add up to the day's cost",
+  );
+  db.close();
+});
+
 test("daily and hourly points break tokens out by kind", () => {
   const db = seededDb();
   const daily = getDailyCost(db, { from: "2026-01-01", to: "2026-01-01" }).points[0];
