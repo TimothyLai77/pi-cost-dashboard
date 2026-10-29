@@ -9,18 +9,19 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { openDatabase, migrateUp } from "../db.js";
 import { upsertSession } from "../upsert.js";
 import { aggregateSession } from "../scanner/aggregate.js";
-import { SCHEMA_VERSION, ingestSession, payloadToRecord, validateIngestPayload } from "../ingest.js";
+import { CONTRACT_KEYS, SCHEMA_VERSION, ingestSession, payloadToRecord, validateIngestPayload } from "../ingest.js";
 import { createApp } from "../index.js";
 
 const fixturesDir = join(import.meta.dirname, "fixtures");
 
 /**
- * A valid v1 payload built from a fixture file.
+ * A valid v2 payload built from a fixture file.
  * @param {string} [fixture]
  * @returns {object}
  */
@@ -38,6 +39,10 @@ const validPayload = (fixture = "full-usage.jsonl") => {
     entryCount: session.entryCount,
     totals: {
       costMicros: session.costMicros,
+      costInputMicros: session.costInputMicros,
+      costOutputMicros: session.costOutputMicros,
+      costCacheReadMicros: session.costCacheReadMicros,
+      costCacheWriteMicros: session.costCacheWriteMicros,
       inputTokens: session.inputTokens,
       outputTokens: session.outputTokens,
       cacheReadTokens: session.cacheReadTokens,
@@ -123,6 +128,33 @@ test("a scan overwrites a provisional push", () => {
   db.close();
 });
 
+test("the contract file and the hand-written validator accept the same fields", () => {
+  const contract = JSON.parse(
+    readFileSync(join(import.meta.dirname, "..", "..", "..", "pi-extension", "payload.schema.json"), "utf8"),
+  );
+  const sorted = (values) => [...values].sort();
+
+  assert.equal(contract.properties.schemaVersion.const, SCHEMA_VERSION, "contract file names this version");
+  assert.deepEqual(sorted(Object.keys(contract.properties)), sorted(CONTRACT_KEYS.topLevel), "top-level fields");
+  assert.deepEqual(sorted(contract.required), sorted(CONTRACT_KEYS.topLevelRequired), "top-level required fields");
+  assert.deepEqual(
+    sorted(Object.keys(contract.properties.totals.properties)),
+    sorted(CONTRACT_KEYS.totals),
+    "totals fields",
+  );
+  assert.deepEqual(sorted(contract.properties.totals.required), sorted(CONTRACT_KEYS.totalsRequired), "totals required fields");
+  assert.deepEqual(
+    sorted(Object.keys(contract.properties.events.items.properties)),
+    sorted(CONTRACT_KEYS.events),
+    "event fields",
+  );
+  assert.deepEqual(
+    sorted(contract.properties.events.items.required),
+    sorted(CONTRACT_KEYS.eventsRequired),
+    "event required fields",
+  );
+});
+
 test("an unsupported schema version is refused before anything is read", () => {
   const result = validateIngestPayload({ ...validPayload(), schemaVersion: 99 });
 
@@ -130,6 +162,59 @@ test("an unsupported schema version is refused before anything is read", () => {
   assert.equal(result.status, 400);
   assert.equal(result.error, "unsupported_schema_version");
   assert.equal(result.supported, SCHEMA_VERSION);
+});
+
+test("a version 1 payload is refused, because version 2 is the only one accepted", () => {
+  const result = validateIngestPayload({ ...validPayload(), schemaVersion: 1 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 400);
+  assert.equal(result.error, "unsupported_schema_version");
+  assert.equal(result.supported, SCHEMA_VERSION);
+});
+
+test("a missing cost component is refused by name", () => {
+  const events = validPayload().events.map(({ costCacheReadMicros, ...event }) => event);
+  const result = validateIngestPayload({ ...validPayload(), events });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.field, "events[0].costCacheReadMicros");
+
+  const totals = { ...validPayload().totals };
+  delete totals.costOutputMicros;
+  const missingTotal = validateIngestPayload({ ...validPayload(), totals });
+  assert.equal(missingTotal.ok, false);
+  assert.equal(missingTotal.field, "totals.costOutputMicros");
+});
+
+test("cost components that do not add up to the cost are refused", () => {
+  const payload = validPayload();
+
+  const paddedEvent = [
+    { ...payload.events[0], costInputMicros: payload.events[0].costInputMicros + 100 },
+    ...payload.events.slice(1),
+  ];
+  const eventResult = validateIngestPayload({ ...payload, events: paddedEvent });
+  assert.equal(eventResult.ok, false);
+  assert.equal(eventResult.field, "events[0].costMicros");
+  assert.match(eventResult.reason, /cost components must add up to costMicros/);
+
+  const paddedTotals = validateIngestPayload({
+    ...payload,
+    totals: { ...payload.totals, costCacheWriteMicros: payload.totals.costCacheWriteMicros + 100_000 },
+  });
+  assert.equal(paddedTotals.ok, false);
+  assert.equal(paddedTotals.field, "totals.costMicros");
+  assert.match(paddedTotals.reason, /cost components must add up to costMicros/);
+
+  // Each component is rounded on its own, so a session's parts can land a couple of
+  // micro-dollars away from its whole. That much is allowed; a client that is off by a
+  // cent is not.
+  const rounded = validateIngestPayload({
+    ...payload,
+    totals: { ...payload.totals, costInputMicros: payload.totals.costInputMicros + 2 },
+  });
+  assert.equal(rounded.ok, true);
 });
 
 test("a missing required field is refused with the field named", () => {
@@ -195,6 +280,13 @@ test("negative money and token counts are refused", () => {
     totals: { ...payload.totals, outputTokens: -10 },
   });
   assert.equal(negativeTotals.ok, false);
+
+  const negativeComponent = validateIngestPayload({
+    ...payload,
+    events: payload.events.map((event) => ({ ...event, costCacheReadMicros: -1 })),
+  });
+  assert.equal(negativeComponent.ok, false);
+  assert.equal(negativeComponent.field, "events[0].costCacheReadMicros");
 });
 
 test("an unknown usage kind is refused", () => {

@@ -31,7 +31,7 @@ const MICRO_DOLLARS_PER_DOLLAR = 1e6;
 
 /**
  * Convert a US dollar amount to integer micro-dollars.
- * @param {number | undefined} dollars Value from `usage.cost.total`; may be absent
+ * @param {number | undefined} dollars One of the `usage.cost` amounts; may be absent
  * @returns {number} Rounded micro-dollars, 0 when absent
  */
 const toMicroDollars = (dollars) =>
@@ -99,6 +99,13 @@ const buildEvent = (entry, entryKind, usage, activeModel) => {
     cacheWriteTokens: usage.cacheWrite ?? 0,
     totalTokens: usage.totalTokens ?? 0,
     costMicros: toMicroDollars(usage.cost?.total),
+    // Pi's pricing pass writes the four parts next to the total, so the split is read,
+    // not derived. Rounding each part separately is what makes the parts sum to the total
+    // within a few micro-dollars, not exactly.
+    costInputMicros: toMicroDollars(usage.cost?.input),
+    costOutputMicros: toMicroDollars(usage.cost?.output),
+    costCacheReadMicros: toMicroDollars(usage.cost?.cacheRead),
+    costCacheWriteMicros: toMicroDollars(usage.cost?.cacheWrite),
   };
 };
 
@@ -119,7 +126,9 @@ const buildEvent = (entry, entryKind, usage, activeModel) => {
  *     sessionId: string, sessionFile: string, parentSessionId: string | null,
  *     cwd: string, name: string | null, startedAt: string | null,
  *     lastActivityAt: string | null, entryCount: number,
- *     costMicros: number, inputTokens: number, outputTokens: number,
+ *     costMicros: number, costInputMicros: number, costOutputMicros: number,
+ *     costCacheReadMicros: number, costCacheWriteMicros: number,
+ *     inputTokens: number, outputTokens: number,
  *     cacheReadTokens: number, cacheWriteTokens: number, totalTokens: number,
  *     userMessages: number, assistantMessages: number, toolCalls: number,
  *     toolResults: number, totalMessages: number
@@ -145,6 +154,10 @@ export const aggregateSession = (filePath, fileContents) => {
     lastActivityAt: null,
     entryCount: 0,
     costMicros: 0,
+    costInputMicros: 0,
+    costOutputMicros: 0,
+    costCacheReadMicros: 0,
+    costCacheWriteMicros: 0,
     inputTokens: 0,
     outputTokens: 0,
     cacheReadTokens: 0,
@@ -245,6 +258,10 @@ export const aggregateSession = (filePath, fileContents) => {
     events.push(event);
 
     session.costMicros += event.costMicros;
+    session.costInputMicros += event.costInputMicros;
+    session.costOutputMicros += event.costOutputMicros;
+    session.costCacheReadMicros += event.costCacheReadMicros;
+    session.costCacheWriteMicros += event.costCacheWriteMicros;
     session.inputTokens += event.inputTokens;
     session.outputTokens += event.outputTokens;
     session.cacheReadTokens += event.cacheReadTokens;

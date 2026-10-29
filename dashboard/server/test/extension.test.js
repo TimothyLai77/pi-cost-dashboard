@@ -80,9 +80,39 @@ test("the server accepts the extension's payload", () => {
   const result = validateIngestPayload(payload);
 
   assert.equal(result.ok, true, result.reason ?? "");
-  assert.equal(payload.schemaVersion, 1);
+  assert.equal(payload.schemaVersion, 2);
   assert.equal(payload.reportedBy, "agent_settled");
   assert.equal(payload.totals.costMicros, 19250);
+});
+
+test("the extension reports the cost of a call in the four parts it bills", () => {
+  const snapshot = buildSnapshot(fakeSessionManager("full-usage.jsonl"));
+  const payload = buildPayload(snapshot, "agent_settled");
+
+  // The parts come from usage.cost, which Pi writes next to the total, so the split the
+  // dashboard shows is the split the provider charged.
+  assert.deepEqual(
+    [
+      payload.totals.costInputMicros,
+      payload.totals.costOutputMicros,
+      payload.totals.costCacheReadMicros,
+      payload.totals.costCacheWriteMicros,
+    ],
+    [276, 507, 17967, 500],
+  );
+
+  const parts =
+    payload.totals.costInputMicros +
+    payload.totals.costOutputMicros +
+    payload.totals.costCacheReadMicros +
+    payload.totals.costCacheWriteMicros;
+  assert.equal(parts, payload.totals.costMicros, "the reported parts add up to the reported whole");
+
+  for (const event of payload.events) {
+    const eventParts =
+      event.costInputMicros + event.costOutputMicros + event.costCacheReadMicros + event.costCacheWriteMicros;
+    assert.equal(eventParts, event.costMicros, `${event.entryId} parts add up to its cost`);
+  }
 });
 
 test("facts carry the kinds the server's CHECK constraint allows", () => {

@@ -71,7 +71,14 @@ test("migration down rolls back the newest migration only", () => {
     .all()
     .map((row) => row.name);
   assert.ok(remaining.includes("sessions"), "sessions survives the newest rollback");
-  assert.equal(remaining.includes("idx_sessions_parent"), false, "002's index is gone");
+  assert.ok(remaining.includes("idx_sessions_parent"), "002's index survives");
+  assert.ok(remaining.includes("daily_cost"), "the views rebuilt by 003's rollback survive");
+
+  // The newest migration's columns are the ones that went away.
+  const sessionColumns = db.prepare("PRAGMA table_info(sessions)").all().map((column) => column.name);
+  const factColumns = db.prepare("PRAGMA table_info(usage_events)").all().map((column) => column.name);
+  assert.equal(sessionColumns.includes("cost_input_micros"), false, "003's session columns are gone");
+  assert.equal(factColumns.includes("cost_cache_read_micros"), false, "003's fact columns are gone");
 
   db.close();
 });
@@ -95,6 +102,24 @@ test("a scanned session is stored with rollup and matching facts", () => {
     Object.fromEntries(facts.map((fact) => [fact.kind, fact.n])),
     { assistant: 4, tool_result: 1, usage: 1, compaction: 1, branch_summary: 1 },
   );
+
+  // The bill is stored in parts as well as in total, on the rollup and on the facts.
+  assert.equal(
+    row.cost_input_micros + row.cost_output_micros + row.cost_cache_read_micros + row.cost_cache_write_micros,
+    19250,
+    "the stored parts add up to the stored whole",
+  );
+  const parts = db
+    .prepare(`
+      SELECT SUM(cost_input_micros)       AS input,
+             SUM(cost_output_micros)      AS output,
+             SUM(cost_cache_read_micros)  AS cacheRead,
+             SUM(cost_cache_write_micros) AS cacheWrite,
+             SUM(cost_micros)             AS total
+      FROM usage_events WHERE session_id = ?
+    `)
+    .get(session.sessionId);
+  assert.equal(parts.input + parts.output + parts.cacheRead + parts.cacheWrite, parts.total);
 
   db.close();
 });
@@ -420,6 +445,10 @@ const pushPayload = (fixture = "full-usage.jsonl") => {
     entryCount: session.entryCount,
     totals: {
       costMicros: session.costMicros,
+      costInputMicros: session.costInputMicros,
+      costOutputMicros: session.costOutputMicros,
+      costCacheReadMicros: session.costCacheReadMicros,
+      costCacheWriteMicros: session.costCacheWriteMicros,
       inputTokens: session.inputTokens,
       outputTokens: session.outputTokens,
       cacheReadTokens: session.cacheReadTokens,

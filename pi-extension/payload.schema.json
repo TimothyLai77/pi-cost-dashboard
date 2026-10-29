@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/TimothyLai77/pi-cost-dashboard/pi-cost-ingest-v1",
+  "$id": "https://github.com/TimothyLai77/pi-cost-dashboard/pi-cost-ingest-v2",
   "title": "Pi cost session snapshot",
   "description": "Payload the Pi extension POSTs to /api/ingest. Numbers and identifiers only: no prompt text, no assistant text, no tool input or output, no file contents, no credentials. The server rejects unknown keys, so a future extension version cannot quietly start shipping transcript data into the database.",
   "type": "object",
@@ -19,8 +19,8 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": 1,
-      "description": "Contract version. The server rejects anything it does not understand."
+      "const": 2,
+      "description": "Contract version. The server rejects anything it does not understand. Version 2 added the four cost components."
     },
     "sessionId": {
       "type": "string",
@@ -46,6 +46,10 @@
       "type": ["string", "null"],
       "description": "Set for a session created by /fork or /clone."
     },
+    "parentSessionFile": {
+      "type": ["string", "null"],
+      "description": "The path Pi wrote in the header's parentSession, named <started>_<uuid>.jsonl. The server keeps the path and the id it reads out of the name."
+    },
     "startedAt": {
       "type": "string",
       "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?Z$",
@@ -66,6 +70,10 @@
       "additionalProperties": false,
       "required": [
         "costMicros",
+        "costInputMicros",
+        "costOutputMicros",
+        "costCacheReadMicros",
+        "costCacheWriteMicros",
         "inputTokens",
         "outputTokens",
         "cacheReadTokens",
@@ -74,6 +82,10 @@
       ],
       "properties": {
         "costMicros": { "type": "integer", "minimum": 0, "description": "US dollars times 1e6, rounded once per entry." },
+        "costInputMicros": { "type": "integer", "minimum": 0, "description": "The session's share of each bill component. The four components add up to costMicros, within a rounding allowance of two micro-dollars per event." },
+        "costOutputMicros": { "type": "integer", "minimum": 0 },
+        "costCacheReadMicros": { "type": "integer", "minimum": 0 },
+        "costCacheWriteMicros": { "type": "integer", "minimum": 0 },
         "inputTokens": { "type": "integer", "minimum": 0 },
         "outputTokens": { "type": "integer", "minimum": 0 },
         "cacheReadTokens": { "type": "integer", "minimum": 0 },
@@ -92,7 +104,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["entryId", "kind", "occurredAt", "costMicros"],
+        "required": ["entryId", "kind", "occurredAt", "costMicros", "costInputMicros", "costOutputMicros", "costCacheReadMicros", "costCacheWriteMicros"],
         "properties": {
           "entryId": { "type": "string", "minLength": 1, "description": "Session entry id, stable across reports." },
           "kind": { "enum": ["assistant", "tool_result", "usage", "compaction", "branch_summary"] },
@@ -107,7 +119,11 @@
           "cacheReadTokens": { "type": "integer", "minimum": 0 },
           "cacheWriteTokens": { "type": "integer", "minimum": 0 },
           "totalTokens": { "type": "integer", "minimum": 0 },
-          "costMicros": { "type": "integer", "minimum": 0 }
+          "costMicros": { "type": "integer", "minimum": 0 },
+          "costInputMicros": { "type": "integer", "minimum": 0, "description": "What this call cost in prompt tokens." },
+          "costOutputMicros": { "type": "integer", "minimum": 0, "description": "What this call cost in completion tokens." },
+          "costCacheReadMicros": { "type": "integer", "minimum": 0, "description": "What this call cost in cached prompt tokens re-read." },
+          "costCacheWriteMicros": { "type": "integer", "minimum": 0, "description": "What this call cost in prompt tokens written to cache." }
         }
       }
     },

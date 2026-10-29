@@ -46,6 +46,18 @@ test("full-usage fixture totals match hand-computed values", () => {
   assert.equal(session.cacheWriteTokens, 500);
   assert.equal(session.totalTokens, 51425);
 
+  // The same money split the way Pi bills it. Hand-computed by adding each column of the
+  // fixture's usage.cost blocks: 100+100+0+5+50+7+11+3 for input, and so on.
+  assert.equal(session.costInputMicros, 276);
+  assert.equal(session.costOutputMicros, 507);
+  assert.equal(session.costCacheReadMicros, 17967);
+  assert.equal(session.costCacheWriteMicros, 500);
+  assert.equal(
+    session.costInputMicros + session.costOutputMicros + session.costCacheReadMicros + session.costCacheWriteMicros,
+    session.costMicros,
+    "the parts add up to the whole Pi reports",
+  );
+
   assert.equal(session.totalMessages, 7);
   assert.equal(session.userMessages, 2);
   assert.equal(session.assistantMessages, 4);
@@ -115,6 +127,13 @@ test("an unpriced model costs zero and is reported, not skipped", () => {
   assert.equal(session.costMicros, 0);
   assert.equal(events.length, 1, "tokens are recorded even when cost is zero");
   assert.equal(session.totalTokens, 10000);
+
+  // A model with no price has a total of zero and four zero parts, not missing parts. The
+  // dashboard shows this split, so it has to be present for a free session too.
+  assert.deepEqual(
+    [events[0].costInputMicros, events[0].costOutputMicros, events[0].costCacheReadMicros, events[0].costCacheWriteMicros],
+    [0, 0, 0, 0],
+  );
 });
 
 test("forked sessions record the parent's session id, plus the file it came from", () => {

@@ -100,11 +100,18 @@ Reporting to a healthy server is indistinguishable from not reporting.
 
 ## Payload
 
-`payload.schema.json` is the contract, version 1. Numbers and identifiers only — no
+`payload.schema.json` is the contract, version 2. Numbers and identifiers only — no
 prompt text, assistant text, tool input or output, file contents, or credentials. The
 server rejects unknown keys, so a future version of this extension cannot quietly start
 shipping transcript content. `dashboard/server/test/extension.test.js` builds payloads
 from real fixtures and requires the server's validator to accept them.
+
+Version 2 added the four parts of every bill — `costInputMicros`, `costOutputMicros`,
+`costCacheReadMicros`, `costCacheWriteMicros` — on each event and in `totals`. Pi's pricing
+pass writes those four next to the total in every usage block, so the extension reads them
+rather than computing them. The server accepts version 2 only, so the extension and the
+server deploy together: a Pi running the older extension gets
+`unsupported_schema_version` back and stops self-reporting until it is reloaded.
 
 ## Files
 

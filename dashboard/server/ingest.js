@@ -11,15 +11,49 @@
  *     transcript content into the database.
  *   - `totals` must match the sum of `events`. A broken client is refused rather than
  *     trusted with a number the dashboard would display as fact.
+ *
+ * The third kind of check is new in version 2: the four cost components must add up to the
+ * total they are reported next to, per event and per session. Version 2 is the only version
+ * accepted, and it requires all four, so every stored row has a split.
  */
 
 import { upsertSession } from "./upsert.js";
 
 /** Supported contract version. @type {number} */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 const UUID = /^[0-9a-fA-F-]{36}$/;
+
+/**
+ * The four parts of a bill, named as the contract names them.
+ *
+ * Pi's pricing pass reports a call's cost as input, output, cache read and cache write
+ * alongside the total, so version 2 of the contract carries all four. Every place that
+ * lists them — the accepted keys, the required keys, the sum check, the upsert mapping —
+ * reads this list, so a component cannot be added in one place and forgotten in another.
+ *
+ * @type {string[]}
+ */
+const COST_COMPONENT_KEYS = [
+  "costInputMicros",
+  "costOutputMicros",
+  "costCacheReadMicros",
+  "costCacheWriteMicros",
+];
+
+/**
+ * How far the four components may sit from the total they are supposed to add up to.
+ *
+ * Each component is rounded to whole micro-dollars on its own, so one event can be off by
+ * at most half a micro-dollar per component — two micro-dollars across four. A session
+ * total is the sum of that much, so its allowance grows with the number of events. The
+ * floor of four keeps a session with no events from demanding exact equality.
+ *
+ * @param {number} eventCount Number of events the sum covers
+ * @returns {number} Micro-dollars of rounding drift to allow
+ */
+const componentTolerance = (eventCount) => Math.max(4, eventCount * 2);
 
 const TOP_LEVEL_KEYS = new Set([
   "schemaVersion",
@@ -53,6 +87,7 @@ const TOP_LEVEL_REQUIRED = [
 
 const TOTAL_KEYS = new Set([
   "costMicros",
+  ...COST_COMPONENT_KEYS,
   "inputTokens",
   "outputTokens",
   "cacheReadTokens",
@@ -67,6 +102,7 @@ const TOTAL_KEYS = new Set([
 
 const TOTAL_REQUIRED = [
   "costMicros",
+  ...COST_COMPONENT_KEYS,
   "inputTokens",
   "outputTokens",
   "cacheReadTokens",
@@ -86,12 +122,35 @@ const EVENT_KEYS = new Set([
   "cacheWriteTokens",
   "totalTokens",
   "costMicros",
+  ...COST_COMPONENT_KEYS,
 ]);
 
-const EVENT_REQUIRED = ["entryId", "kind", "occurredAt", "costMicros"];
+const EVENT_REQUIRED = ["entryId", "kind", "occurredAt", "costMicros", ...COST_COMPONENT_KEYS];
 
 const EVENT_KINDS = new Set(["assistant", "tool_result", "usage", "compaction", "branch_summary"]);
 const REPORTERS = new Set(["command", "agent_settled", "shutdown"]);
+
+/**
+ * The field lists this validator enforces.
+ *
+ * Exported for one reason: `pi-extension/payload.schema.json` is the file the contract is
+ * written in, and the validator is written by hand against it. A test compares the two, so
+ * a field added to one and not the other fails instead of quietly diverging.
+ *
+ * @type {{
+ *   topLevel: Set<string>, topLevelRequired: string[],
+ *   totals: Set<string>, totalsRequired: string[],
+ *   events: Set<string>, eventsRequired: string[]
+ * }}
+ */
+export const CONTRACT_KEYS = {
+  topLevel: TOP_LEVEL_KEYS,
+  topLevelRequired: TOP_LEVEL_REQUIRED,
+  totals: TOTAL_KEYS,
+  totalsRequired: TOTAL_REQUIRED,
+  events: EVENT_KEYS,
+  eventsRequired: EVENT_REQUIRED,
+};
 
 /**
  * @param {string} field
@@ -211,6 +270,16 @@ export const validateIngestPayload = (body) => {
         return reject(`events[${index}].${key}`, "must be a non-negative integer");
       }
     }
+    for (const key of COST_COMPONENT_KEYS) {
+      if (!isCount(event[key])) return reject(`events[${index}].${key}`, "must be a non-negative integer");
+    }
+    const eventComponents = COST_COMPONENT_KEYS.reduce((sum, key) => sum + event[key], 0);
+    if (Math.abs(eventComponents - event.costMicros) > componentTolerance(1)) {
+      return reject(
+        `events[${index}].costMicros`,
+        `cost components must add up to costMicros (components sum to ${eventComponents})`,
+      );
+    }
     for (const key of ["provider", "modelId"]) {
       if (event[key] !== undefined && event[key] !== null && typeof event[key] !== "string") {
         return reject(`events[${index}].${key}`, "must be a string when present");
@@ -230,6 +299,17 @@ export const validateIngestPayload = (body) => {
   const tokenTolerance = Math.max(100, Math.round(totals.totalTokens * 0.01));
   if (Math.abs(totals.totalTokens - eventTotalTokens) > tokenTolerance) {
     return reject("totals.totalTokens", `must match the sum of events (${eventTotalTokens})`);
+  }
+
+  // The parts are checked against the whole at both levels: an event whose components do
+  // not add up to its own cost is a broken client, and so is a session total whose
+  // components do not add up to it.
+  const totalsComponents = COST_COMPONENT_KEYS.reduce((sum, key) => sum + totals[key], 0);
+  if (Math.abs(totalsComponents - totals.costMicros) > componentTolerance(body.events.length)) {
+    return reject(
+      "totals.costMicros",
+      `cost components must add up to costMicros (components sum to ${totalsComponents})`,
+    );
   }
 
   return { ok: true, payload: body };
@@ -255,6 +335,10 @@ export const payloadToRecord = (payload) => ({
     lastActivityAt: payload.lastActivityAt,
     entryCount: payload.entryCount,
     costMicros: payload.totals.costMicros,
+    costInputMicros: payload.totals.costInputMicros,
+    costOutputMicros: payload.totals.costOutputMicros,
+    costCacheReadMicros: payload.totals.costCacheReadMicros,
+    costCacheWriteMicros: payload.totals.costCacheWriteMicros,
     inputTokens: payload.totals.inputTokens ?? 0,
     outputTokens: payload.totals.outputTokens ?? 0,
     cacheReadTokens: payload.totals.cacheReadTokens ?? 0,
@@ -278,6 +362,10 @@ export const payloadToRecord = (payload) => ({
     cacheWriteTokens: event.cacheWriteTokens ?? 0,
     totalTokens: event.totalTokens ?? 0,
     costMicros: event.costMicros,
+    costInputMicros: event.costInputMicros,
+    costOutputMicros: event.costOutputMicros,
+    costCacheReadMicros: event.costCacheReadMicros,
+    costCacheWriteMicros: event.costCacheWriteMicros,
   })),
 });
 

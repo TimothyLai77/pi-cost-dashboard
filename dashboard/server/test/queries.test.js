@@ -31,6 +31,7 @@ import {
   MAX_PAGE_SIZE,
 } from "../queries.js";
 import { createApp } from "../index.js";
+import { SCHEMA_VERSION } from "../ingest.js";
 
 /**
  * A migrated in-memory database holding the fixture sessions.
@@ -576,7 +577,7 @@ test("POST /api/ingest with an empty object reports the contract version it need
     assert.equal(response.status, 400);
     const body = await response.json();
     assert.equal(body.error, "unsupported_schema_version");
-    assert.equal(body.supported, 1);
+    assert.equal(body.supported, SCHEMA_VERSION);
   });
   db.close();
 });

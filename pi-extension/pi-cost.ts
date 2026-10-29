@@ -64,7 +64,7 @@ type SessionSource = ExtensionContext["sessionManager"];
 const MICRO_DOLLARS_PER_DOLLAR = 1e6;
 
 /** Payload contract version, matching pi-extension/payload.schema.json. */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 /** Usage kinds, matching the server contract. */
 type UsageKind = "assistant" | "tool_result" | "usage" | "compaction" | "branch_summary";
@@ -81,6 +81,10 @@ interface UsageFact {
   cacheWriteTokens: number;
   totalTokens: number;
   costMicros: number;
+  costInputMicros: number;
+  costOutputMicros: number;
+  costCacheReadMicros: number;
+  costCacheWriteMicros: number;
 }
 
 interface SessionSnapshot {
@@ -389,7 +393,6 @@ export const buildSnapshot = (sessionManager: SessionSource): SessionSnapshot | 
     const usage = found.usage;
     const costForEntry = toMicroDollars(usage.cost?.total);
     const tokensForEntry = usage.totalTokens ?? 0;
-
     facts.push({
       entryId: entry.id,
       kind: found.kind,
@@ -402,6 +405,12 @@ export const buildSnapshot = (sessionManager: SessionSource): SessionSnapshot | 
       cacheWriteTokens: usage.cacheWrite ?? 0,
       totalTokens: tokensForEntry,
       costMicros: costForEntry,
+      // Pi's pricing pass writes these four next to the total, so the split is read off the
+      // usage block, not worked out from the token counts and a price table.
+      costInputMicros: toMicroDollars(usage.cost?.input),
+      costOutputMicros: toMicroDollars(usage.cost?.output),
+      costCacheReadMicros: toMicroDollars(usage.cost?.cacheRead),
+      costCacheWriteMicros: toMicroDollars(usage.cost?.cacheWrite),
     });
 
     costMicros += costForEntry;
@@ -439,7 +448,7 @@ export const buildSnapshot = (sessionManager: SessionSource): SessionSnapshot | 
  *
  * @param {SessionSnapshot} snapshot
  * @param {"command" | "agent_settled" | "shutdown"} reportedBy
- * @returns {object} Body matching payload.schema.json v1
+ * @returns {object} Body matching payload.schema.json v2
  */
 export const buildPayload = (snapshot: SessionSnapshot, reportedBy: "command" | "agent_settled" | "shutdown") => ({
   schemaVersion: SCHEMA_VERSION,
@@ -454,6 +463,10 @@ export const buildPayload = (snapshot: SessionSnapshot, reportedBy: "command" | 
   entryCount: snapshot.entryCount,
   totals: {
     costMicros: snapshot.costMicros,
+    costInputMicros: snapshot.facts.reduce((sum, fact) => sum + fact.costInputMicros, 0),
+    costOutputMicros: snapshot.facts.reduce((sum, fact) => sum + fact.costOutputMicros, 0),
+    costCacheReadMicros: snapshot.facts.reduce((sum, fact) => sum + fact.costCacheReadMicros, 0),
+    costCacheWriteMicros: snapshot.facts.reduce((sum, fact) => sum + fact.costCacheWriteMicros, 0),
     inputTokens: snapshot.facts.reduce((sum, fact) => sum + fact.inputTokens, 0),
     outputTokens: snapshot.facts.reduce((sum, fact) => sum + fact.outputTokens, 0),
     cacheReadTokens: snapshot.facts.reduce((sum, fact) => sum + fact.cacheReadTokens, 0),

@@ -238,6 +238,21 @@ spend dashboard, and sums stay exact.
 `cost_micros` = `Math.round(usage.cost.total * 1e6)`. The float→int rounding
 happens once, in the scanner, and never in a sum.
 
+### The bill in parts
+
+`usage.cost` is not one number. Pi's pricing pass writes four — `input`, `output`,
+`cacheRead`, `cacheWrite` — and the total, so the split of a call's cost is read off the
+session file, not worked out from token counts and a price table. Migration
+`003_cost_breakdown` keeps all four as `cost_input_micros`, `cost_output_micros`,
+`cost_cache_read_micros`, `cost_cache_write_micros` on both `usage_events` and `sessions`.
+
+Each part is rounded on its own, exactly like the total, so the four parts of an event can
+land up to two micro-dollars away from its `cost_micros`, and a session's parts can drift
+by that much per event. Measured on this machine's 15,069 events: worst single event 1
+micro-dollar, worst session 7 micro-dollars ($0.000007). The parts are stored as Pi
+reported them, and the ingest validator rejects a client whose parts are off by more than
+that.
+
 ### DDL
 
 `dashboard/server/migrations/001_init.sql`
@@ -254,6 +269,10 @@ CREATE TABLE sessions (
   last_activity_at    TEXT    NOT NULL,                 -- max entry timestamp
   entry_count         INTEGER NOT NULL,                 -- ingest monotonic guard
   cost_micros          INTEGER NOT NULL DEFAULT 0,
+  cost_input_micros    INTEGER NOT NULL DEFAULT 0,     -- the same money, in the four parts
+  cost_output_micros   INTEGER NOT NULL DEFAULT 0,     -- Pi's usage.cost reports them; they
+  cost_cache_read_micros  INTEGER NOT NULL DEFAULT 0,  -- add up to cost_micros within a
+  cost_cache_write_micros INTEGER NOT NULL DEFAULT 0,  -- rounding allowance
   input_tokens        INTEGER NOT NULL DEFAULT 0,
   output_tokens       INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
@@ -283,6 +302,10 @@ CREATE TABLE usage_events (
   cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
   total_tokens        INTEGER NOT NULL DEFAULT 0,
   cost_micros          INTEGER NOT NULL DEFAULT 0,
+  cost_input_micros    INTEGER NOT NULL DEFAULT 0,
+  cost_output_micros   INTEGER NOT NULL DEFAULT 0,
+  cost_cache_read_micros  INTEGER NOT NULL DEFAULT 0,
+  cost_cache_write_micros INTEGER NOT NULL DEFAULT 0,
   UNIQUE (session_id, entry_id)                        -- idempotent ingest
 );
 
@@ -330,6 +353,10 @@ SELECT date(u.occurred_at)        AS day,
        u.provider                 AS provider,
        u.model_id                 AS model_id,
        SUM(u.cost_micros)         AS cost_micros,
+       SUM(u.cost_input_micros)   AS cost_input_micros,
+       SUM(u.cost_output_micros)  AS cost_output_micros,
+       SUM(u.cost_cache_read_micros)  AS cost_cache_read_micros,
+       SUM(u.cost_cache_write_micros) AS cost_cache_write_micros,
        SUM(u.total_tokens)        AS total_tokens,
        COUNT(DISTINCT u.session_id) AS sessions
 FROM usage_events u
@@ -340,6 +367,10 @@ CREATE VIEW model_cost AS
 SELECT provider,
        model_id,
        SUM(cost_micros)   AS cost_micros,
+       SUM(cost_input_micros)  AS cost_input_micros,
+       SUM(cost_output_micros) AS cost_output_micros,
+       SUM(cost_cache_read_micros)  AS cost_cache_read_micros,
+       SUM(cost_cache_write_micros) AS cost_cache_write_micros,
        SUM(total_tokens)  AS total_tokens,
        COUNT(*)           AS events
 FROM usage_events
@@ -416,7 +447,7 @@ marks a row as a nested subagent session.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sessionId": "01a18334-af65-7710-ad27-dc555fb245ce",
   "sessionFile": "/home/user/.pi/agent/sessions/--home-user--/2026-10-28T15-50-30-501Z_01a18334-....jsonl",
   "cwd": "/home/user",
@@ -426,6 +457,10 @@ marks a row as a nested subagent session.
   "entryCount": 812,
   "totals": {
     "costMicros": 412330,
+    "costInputMicros": 88000,
+    "costOutputMicros": 320330,
+    "costCacheReadMicros": 4000,
+    "costCacheWriteMicros": 0,
     "inputTokens": 90210,
     "outputTokens": 44120,
     "cacheReadTokens": 1240000,
@@ -449,7 +484,11 @@ marks a row as a nested subagent session.
       "cacheReadTokens": 16175,
       "cacheWriteTokens": 0,
       "totalTokens": 17683,
-      "costMicros": 633
+      "costMicros": 633,
+      "costInputMicros": 141,
+      "costOutputMicros": 489,
+      "costCacheReadMicros": 3,
+      "costCacheWriteMicros": 0
     },
     {
       "entryId": "c3d4e5f6",
@@ -462,7 +501,11 @@ marks a row as a nested subagent session.
       "cacheReadTokens": 30,
       "cacheWriteTokens": 0,
       "totalTokens": 60,
-      "costMicros": 500
+      "costMicros": 500,
+      "costInputMicros": 30,
+      "costOutputMicros": 470,
+      "costCacheReadMicros": 0,
+      "costCacheWriteMicros": 0
     }
   ],
   "reportedBy": "agent_settled",
@@ -482,18 +525,27 @@ Notes:
 - Nothing in the payload is conversation content. Enforced by validation:
   unknown keys are rejected, `name` is capped at 200 characters, and there is
   no prompt field to send.
+- Version 2 added the four cost components, per event and in `totals`. They are required,
+  so every stored row has a split, and they must add up to the `costMicros` next to them.
+  Version 1 is rejected outright: the server accepts 2 only, which means the extension and
+  the server deploy together, and a Pi still on the older extension stops reporting until it
+  is updated (file scanning is unaffected).
 
 ### Validation on ingest
 
 Server-side, in this order:
 
-1. `schemaVersion === 1`, else `400` with `{ error: "unsupported_schema_version" }`.
+1. `schemaVersion === 2`, else `400` with `{ error: "unsupported_schema_version" }`.
 2. `sessionId` matches `^[0-9a-f-]{36}$`.
 3. Every `events[].entryId` non-empty, every `occurredAt` parses as ISO-8601.
 4. Every numeric field is a finite non-negative number; `costMicros` integer.
 5. Recompute: `totals` must be within 1% of the sum of `events`, else `422` with
    the mismatch. This catches a broken extension before it stores bad totals.
-6. `entryCount >= sessions.entry_count` for an existing session (§7).
+6. Recompute: the four cost components must add up to the `costMicros` they are reported
+   next to — per event within 4 micro-dollars, per session within 2 micro-dollars per
+   event. Each part is rounded on its own, so a couple of micro-dollars is arithmetic, and
+   a cent is a broken client (§4).
+7. `entryCount >= sessions.entry_count` for an existing session (§7).
 
 ---
 
@@ -1102,6 +1154,8 @@ rejects reports that are older than what is stored.
 | Unit: scanner | Cold scan, warm scan with unchanged files skips all, changed mtime re-parses one, missing file deletes the row |
 | Unit: ingest guard | Stale `entryCount` rejected; equal accepted; out-of-order arrival never lowers `cost_micros` |
 | Unit: validation | Bad `schemaVersion`, negative token, non-numeric cost, oversized body, unknown key |
+| Unit: cost split | A version 1 payload is refused; a missing component is refused by name; parts that do not add up to the cost are refused at both event and session level, within the rounding allowance |
+| Unit: `aggregate.js` split | Fixture parts are hand-added from each `usage.cost` block and equal the stored `cost_input_micros` and friends; an unpriced model reports four zeros |
 | Integration | Backfill this machine's 266 sessions, assert the grand total equals the independent Appendix A scanner run in the same second, and assert session row count equals the `.jsonl` file count |
 | Integration | Chart query returns 58 day buckets with correct UTC grouping |
 | Extension | Load with `pi --extension ./pi-cost.ts`; run `/pi-cost`; confirm totals match `/session` for the same session |

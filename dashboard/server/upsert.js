@@ -30,12 +30,14 @@ export const upsertSession = (db, session, events, source) => {
       .prepare(`
         INSERT INTO sessions (
           session_id, session_file, parent_session_id, parent_session_file, cwd, name, started_at,
-          last_activity_at, entry_count, cost_micros, input_tokens, output_tokens,
+          last_activity_at, entry_count, cost_micros, cost_input_micros, cost_output_micros,
+          cost_cache_read_micros, cost_cache_write_micros, input_tokens, output_tokens,
           cache_read_tokens, cache_write_tokens, total_tokens, user_messages,
           assistant_messages, tool_calls, tool_results, total_messages, last_source
         ) VALUES (
           @session_id, @session_file, @parent_session_id, @parent_session_file, @cwd, @name, @started_at,
-          @last_activity_at, @entry_count, @cost_micros, @input_tokens, @output_tokens,
+          @last_activity_at, @entry_count, @cost_micros, @cost_input_micros, @cost_output_micros,
+          @cost_cache_read_micros, @cost_cache_write_micros, @input_tokens, @output_tokens,
           @cache_read_tokens, @cache_write_tokens, @total_tokens, @user_messages,
           @assistant_messages, @tool_calls, @tool_results, @total_messages, @source
         )
@@ -49,6 +51,10 @@ export const upsertSession = (db, session, events, source) => {
           last_activity_at   = excluded.last_activity_at,
           entry_count        = excluded.entry_count,
           cost_micros       = excluded.cost_micros,
+          cost_input_micros = excluded.cost_input_micros,
+          cost_output_micros = excluded.cost_output_micros,
+          cost_cache_read_micros = excluded.cost_cache_read_micros,
+          cost_cache_write_micros = excluded.cost_cache_write_micros,
           input_tokens       = excluded.input_tokens,
           output_tokens      = excluded.output_tokens,
           cache_read_tokens  = excluded.cache_read_tokens,
@@ -75,6 +81,10 @@ export const upsertSession = (db, session, events, source) => {
         last_activity_at: session.lastActivityAt ?? session.startedAt ?? "",
         entry_count: session.entryCount,
         cost_micros: session.costMicros,
+        cost_input_micros: session.costInputMicros,
+        cost_output_micros: session.costOutputMicros,
+        cost_cache_read_micros: session.costCacheReadMicros,
+        cost_cache_write_micros: session.costCacheWriteMicros,
         input_tokens: session.inputTokens,
         output_tokens: session.outputTokens,
         cache_read_tokens: session.cacheReadTokens,
@@ -97,11 +107,13 @@ export const upsertSession = (db, session, events, source) => {
       INSERT INTO usage_events (
         session_id, entry_id, kind, occurred_at, provider, model_id,
         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-        total_tokens, cost_micros
+        total_tokens, cost_micros, cost_input_micros, cost_output_micros,
+        cost_cache_read_micros, cost_cache_write_micros
       ) VALUES (
         @session_id, @entry_id, @kind, @occurred_at, @provider, @model_id,
         @input_tokens, @output_tokens, @cache_read_tokens, @cache_write_tokens,
-        @total_tokens, @cost_micros
+        @total_tokens, @cost_micros, @cost_input_micros, @cost_output_micros,
+        @cost_cache_read_micros, @cost_cache_write_micros
       )
     `);
     for (const event of events) {
@@ -118,6 +130,10 @@ export const upsertSession = (db, session, events, source) => {
         cache_write_tokens: event.cacheWriteTokens,
         total_tokens: event.totalTokens,
         cost_micros: event.costMicros,
+        cost_input_micros: event.costInputMicros,
+        cost_output_micros: event.costOutputMicros,
+        cost_cache_read_micros: event.costCacheReadMicros,
+        cost_cache_write_micros: event.costCacheWriteMicros,
       });
     }
     return true;
