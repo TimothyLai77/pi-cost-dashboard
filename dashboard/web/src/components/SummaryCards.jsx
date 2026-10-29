@@ -8,7 +8,8 @@
  * The token figure is input + output + cache reads + cache writes, and cache reads are the
  * overwhelming majority of it: every model call re-reports the cached prefix it read, so a
  * busy day reads as hundreds of millions of tokens and a few dollars. The breakdown is
- * printed under the total, and the strip footer spells out what the number means.
+ * printed under the total, and the money line under it says which of those four things the
+ * dollars actually went to.
  */
 
 import { formatTokens } from "../api.js";
@@ -26,16 +27,54 @@ const tokenKinds = (window) =>
     ...(window?.cacheWriteTokens > 0 ? [`cache write ${formatTokens(window.cacheWriteTokens)}`] : []),
   ].join(" · ");
 
+/** The four parts of a bill, in the order the line shows them: biggest first, usually. */
+const COST_PART_LABELS = { output: "out", input: "in", cacheRead: "cache read", cacheWrite: "cache write" };
+
 /**
- * @param {{ label: string, costUsd: string, window: object, sessions: number }} props
+ * The window's spend in the four parts the provider billed it in.
+ *
+ * Always four parts, zeros included: a session on a locally hosted model is priced at zero,
+ * and "out $0.00 · in $0.00 · cache read $0.00 · cache write $0.00" is the honest label for
+ * that spend. Showing it only when money was spent would make free usage look identical to a
+ * window with no data at all.
+ *
+ * @param {{ costBreakdown?: { input?: object, output?: object, cacheRead?: object, cacheWrite?: object } }} [window]
+ * @returns {{ text: string, title: string } | null} text like
+ *   "out $4.10 · in $2.30 · cache read $0.02 · cache write $0.00", and a title carrying the
+ *   same four figures as exact micro-dollars; null when the response has no breakdown at all
+ */
+const costParts = (window) => {
+  // A server older than contract version 2 has no split to report. Four $0.00 parts under a
+  // non-zero total would read as "this money cost nothing", so the line is simply absent
+  // until the server is updated.
+  if (!window?.costBreakdown) return null;
+
+  const parts = Object.entries(COST_PART_LABELS).map(([key, label]) => ({
+    label,
+    costUsd: window.costBreakdown[key]?.costUsd ?? "$0.00",
+    costMicros: window.costBreakdown[key]?.costMicros ?? 0,
+  }));
+
+  return {
+    text: parts.map((part) => `${part.label} ${part.costUsd}`).join(" · "),
+    // Each part is rounded for display, so the four can add up to a cent away from the
+    // window's total. The exact figures are one hover away.
+    title: parts.map((part) => `${part.label} ${part.costMicros.toLocaleString("en-US")} micro-dollars`).join(" · "),
+  };
+};
+
+/**
+ * @param {{ label: string, costUsd: string, window: object }} props
  * @returns {JSX.Element}
  */
 const SummaryCell = ({ label, costUsd, window }) => {
   const kinds = tokenKinds(window);
+  const parts = costParts(window);
   return (
     <div className="summary-cell">
       <span className="eyebrow">{label}</span>
       <span className="value">{costUsd}</span>
+      {parts ? <span className="sub-cost numeral" title={parts.title}>{parts.text}</span> : null}
       <span
         className="sub numeral"
         title={`${kinds} · ${window?.sessions ?? 0} session(s), ${window?.events ?? 0} model call(s)`}

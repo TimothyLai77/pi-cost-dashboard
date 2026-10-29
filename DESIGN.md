@@ -940,7 +940,13 @@ React + Vite + Recharts, served by Express.
 Layout, top to bottom:
 
 1. **Summary cards** — Today, Last 7 days, Last 30 days, All time. Each shows USD
-   and token count. The all-time card is the headline number.
+   and token count. The all-time card is the headline number. Under the money figure sits
+   the bill in the four parts the provider charged — `out · in · cache read · cache write` —
+   always all four, zeros included: most usage on this machine is priced at zero, and four
+   `$0.00`s is the honest label for a window that did real work for free. Hovering names the
+   exact micro-dollar figures, since each part is rounded for display and the four can add up
+   to a cent away from the window's total. A server older than payload version 2 reports no
+   split, and the line is absent rather than claiming four zeros under a non-zero total.
 2. **Daily chart** — the main view. Recharts `LineChart` (or `ComposedChart` with
    bars) of cost per day. Controls: range (30 / 90 / 365 / all), project filter,
    provider filter, UTC vs local days toggle. A `ReferenceLine` at 0 makes the

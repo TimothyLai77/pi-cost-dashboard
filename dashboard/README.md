@@ -169,6 +169,12 @@ machine are 113M cache reads, priced at zero, over $14.47 of spend. Every place 
 token total also shows the split into cache read, input, output, and cache write: the summary
 strip, the session list, the chart tooltips, and the model ledger.
 
+The money in the summary strip splits the same way: under each window's dollar figure sits
+`out · in · cache read · cache write`, the four parts the provider billed. All four are
+always shown, zeros included — a locally hosted model is priced at zero, and "$0.00" four
+times is the honest label for a busy free window. Hover for the exact micro-dollar figures;
+each part is rounded for display, so the four can land a cent away from the window's total.
+
 ## Timezone
 
 `PI_COST_TZ` sets the zone the dashboard buckets in: the day bars, the 24 hour labels in

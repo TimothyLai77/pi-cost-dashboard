@@ -247,6 +247,15 @@ body {
   font-size: 0.75rem;
 }
 
+/* The money split, under the total it belongs to. Quieter than the total, louder than the
+   token kinds: it answers "where did the money go", which the token line does not. */
+.summary-cell .sub-cost {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--ink-soft);
+  font-size: 0.6875rem;
+}
+
 /* The four kinds under the total, quieter than the total itself. */
 .summary-cell .sub-kinds {
   display: block;
