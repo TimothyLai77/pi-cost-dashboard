@@ -171,8 +171,14 @@ strip, the session list, the chart tooltips, and the model ledger.
 
 The money in the summary strip splits the same way, and the charts carry it too: each day bar
 and each hour bar is stacked in `out · in · cache read · cache write`, and the tooltip spells
-the four out in dollars above the token breakdown. Amber segments are completion and prompt
-tokens, steel segments are cache. All four parts are
+the four out in dollars above the token breakdown. Each summary cell (today, 7 days, 30 days,
+all time) draws the same four as a thin 100% stacked strip under its total, so the shape of a
+bill is visible at a glance — a day that was all completion tokens and a month that paid for
+prompt re-reads look different. Each part gets its own hue: burnt orange for `out`, mustard
+for `in`, blue for cache reads, teal for cache writes. Warm is text you pay for per token,
+cool is the machine's own context traffic; inside each pair the parts are separated by hue
+rather than lightness, because lightness steps are hard to tell apart in a four-wide stack.
+All four parts are
 always shown, zeros included — a locally hosted model is priced at zero, and "$0.00" four
 times is the honest label for a busy free window. Hover for the exact micro-dollar figures;
 each part is rounded for display, so the four can land a cent away from the window's total.

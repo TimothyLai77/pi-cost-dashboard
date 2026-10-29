@@ -941,7 +941,8 @@ Layout, top to bottom:
 
 1. **Summary cards** — Today, Last 7 days, Last 30 days, All time. Each shows USD
    and token count. The all-time card is the headline number. Under the money figure sits
-   the bill in the four parts the provider charged — `out · in · cache read · cache write` —
+   a 100% stacked strip of the bill in the four parts the provider charged, and under that the
+   same four in dollars — `out · in · cache read · cache write` —
    always all four, zeros included: most usage on this machine is priced at zero, and four
    `$0.00`s is the honest label for a window that did real work for free. Hovering names the
    exact micro-dollar figures, since each part is rounded for display and the four can add up
@@ -951,11 +952,14 @@ Layout, top to bottom:
    bars) of cost per day. Controls: range (30 / 90 / 365 / all), project filter,
    provider filter, UTC vs local days toggle. A `ReferenceLine` at 0 makes the
    many zero-cost days legible. Each bar is stacked in the four parts the provider billed —
-   completion tokens, prompt tokens, cache reads, cache writes — in four colors across two
-   hues: warm amber for the money paid per token of text, the page's cool accent for cache
-   money. Segments are separated by a hairline in the panel's own color, so the stack reads
-   as ledger bands and the fills do not have to be far apart in hue to stay legible. The
-   hourly drill-down stacks the same four, in the same colors.
+   completion tokens, prompt tokens, cache reads, cache writes — one hue each: burnt orange
+   for completion, mustard for prompt, blue for cache reads, teal for cache writes. Warm is
+   money paid per token of text, cool is the machine's own context traffic, which is the
+   page's existing color language; inside each pair the parts are separated by hue rather than
+   lightness, because lightness steps are hard to tell apart in a four-wide stack. Segments
+   are separated by a hairline in the panel's own color, so the stack reads as ledger bands.
+   The hourly drill-down stacks the same four, in the same colors, and the summary strip uses
+   the same hues for the same parts.
 3. **Model breakdown** — bar list of spend by provider/model, since the zero-cost
    finding makes this the most informative panel on this machine.
 4. **Session table** — paginated, newest first: name, project, started, tokens,

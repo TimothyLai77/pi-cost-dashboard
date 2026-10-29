@@ -258,6 +258,22 @@ body {
   letter-spacing: -0.02em;
 }
 
+/* The window's money as a shape. Each segment is that part's share of this cell's own
+   spend, in the same hues as the chart's stacked bars, split by hairlines the way the bars
+   are. The track shows through when a window spent nothing. */
+.summary-cell .cost-strip {
+  display: flex;
+  gap: 1px;
+  height: 6px;
+  margin-top: var(--space-2);
+  background: var(--rule);
+}
+
+.summary-cell .cost-strip span {
+  flex-basis: 0;
+  min-width: 0;
+}
+
 .summary-cell .sub {
   display: block;
   margin-top: var(--space-1);

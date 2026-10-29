@@ -6,11 +6,11 @@
  * place that names them, so a bar stack, a legend, a tooltip line and the summary strip all
  * list the same four in the same order.
  *
- * The colors follow the page's existing language: warm amber is money, and the page's cool
- * accent is the machine's own traffic. So the two parts you pay for per token of text are
- * amber, and the two cache parts are steel. Every value clears 3:1 against the surface it
- * is drawn on in both palettes, which is the rule the rest of the chart colors were picked
- * by.
+ * The colors follow the page's existing language: warm is text you pay for per token, cool is
+ * the machine's own context traffic. Inside each pair the parts are separated by hue, not by
+ * lightness, because a four-wide stack makes lightness steps hard to tell apart. Every value
+ * clears 3:1 against the surface it is drawn on in both palettes, which is the rule the rest
+ * of the chart colors were picked by.
  */
 
 import { formatCost } from "../api.js";
@@ -36,6 +36,50 @@ export const COST_PARTS = [
 const dollars = (costMicros) => {
   const micros = costMicros ?? 0;
   return formatCost(micros, micros > 0 && micros < 10000 ? 4 : 2);
+};
+
+/**
+ * One window's spend as the four parts, each with its share of that window's own money.
+ *
+ * The summary cells draw a 100% stacked strip, so they need shares alongside the dollars.
+ * Every window reports all four parts, zeros included, so an empty window draws the bare
+ * track in the same place a busy one draws its segments and the four cells stay the same
+ * shape.
+ *
+ * @param {{ costBreakdown?: Record<string, { costMicros?: number, costUsd?: string }> }} [point]
+ * @returns {{ parts: { key: string, label: string, color: string, costMicros: number, costUsd: string, share: number }[], totalMicros: number, title: string, ariaLabel: string } | null}
+ *   null when the point carries no breakdown, which is what a server older than payload v2 sends
+ */
+export const costSplit = (point) => {
+  if (!point?.costBreakdown) return null;
+
+  const totalMicros = COST_PARTS.reduce(
+    (sum, part) => sum + (point.costBreakdown[part.key]?.costMicros ?? 0),
+    0,
+  );
+
+  const parts = COST_PARTS.map(({ key, label, color }) => {
+    const costMicros = point.costBreakdown[key]?.costMicros ?? 0;
+    return {
+      key,
+      label,
+      color,
+      costMicros,
+      costUsd: point.costBreakdown[key]?.costUsd ?? dollars(costMicros),
+      share: totalMicros > 0 ? (costMicros / totalMicros) * 100 : 0,
+    };
+  });
+
+  // A window that spent nothing has no shares to name; saying so reads better than a list
+  // of four zeros.
+  const paid = parts.filter((part) => part.costMicros > 0);
+
+  return {
+    parts,
+    totalMicros,
+    title: parts.map((part) => `${part.label} ${part.costMicros.toLocaleString("en-US")} micro-dollars`).join(" · "),
+    ariaLabel: paid.length > 0 ? paid.map((part) => `${part.label} ${Math.round(part.share)}%`).join(", ") : "no spend",
+  };
 };
 
 /**

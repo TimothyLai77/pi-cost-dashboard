@@ -10,10 +10,15 @@
  * busy day reads as hundreds of millions of tokens and a few dollars. The breakdown is
  * printed under the total, and the money line under it says which of those four things the
  * dollars actually went to.
+ *
+ * Under each total is a 100% stacked strip of the money: four segments in the same hues the
+ * chart bars use, each one that part's share of that cell's spend. Every cell is the full
+ * width, so the four cells compare the shape of a bill, and the dollar figure above the strip
+ * carries the size. A cell that spent nothing shows the bare track.
  */
 
 import { formatTokens } from "../api.js";
-import { COST_PARTS } from "./costParts.js";
+import { costSplit } from "./costParts.js";
 
 /**
  * The four token kinds behind a window's total, as a compact second line.
@@ -29,59 +34,46 @@ const tokenKinds = (window) =>
   ].join(" · ");
 
 /**
- * The window's spend in the four parts the provider billed it in.
+ * One window of the strip: label, total, the money split as a bar and as dollars, tokens.
  *
- * Always four parts, zeros included: a session on a locally hosted model is priced at zero,
- * and "out $0.00 · in $0.00 · cache read $0.00 · cache write $0.00" is the honest label for
- * that spend. Showing it only when money was spent would make free usage look identical to a
- * window with no data at all.
+ * The bar is 100% of this cell's own spend, so the four cells compare the shape of a bill
+ * (today was all output, the month paid for cache reads) and not its size — the size is the
+ * dollar figure above it. Segments only exist for parts that cost something; a window that
+ * spent nothing shows the bare track.
  *
- * @param {{ costBreakdown?: { input?: object, output?: object, cacheRead?: object, cacheWrite?: object } }} [window]
- * @returns {{ parts: { label: string, costUsd: string, color: string }[], title: string } | null}
- *   the four parts in bar order, each with the hue its bar segment uses, and a title carrying
- *   the same figures as exact micro-dollars; null when the response has no breakdown at all
- */
-const costParts = (window) => {
-  // A server older than contract version 2 has no split to report. Four $0.00 parts under a
-  // non-zero total would read as "this money cost nothing", so the line is simply absent
-  // until the server is updated.
-  if (!window?.costBreakdown) return null;
-
-  const parts = COST_PARTS.map(({ key, label, color }) => ({
-    label,
-    color,
-    costUsd: window.costBreakdown[key]?.costUsd ?? "$0.00",
-    costMicros: window.costBreakdown[key]?.costMicros ?? 0,
-  }));
-
-  return {
-    parts,
-    // Each part is rounded for display, so the four can add up to a cent away from the
-    // window's total. The exact figures are one hover away.
-    title: parts.map((part) => `${part.label} ${part.costMicros.toLocaleString("en-US")} micro-dollars`).join(" · "),
-  };
-};
-
-/**
  * @param {{ label: string, costUsd: string, window: object }} props
  * @returns {JSX.Element}
  */
 const SummaryCell = ({ label, costUsd, window }) => {
   const kinds = tokenKinds(window);
-  const parts = costParts(window);
+  const split = costSplit(window);
   return (
     <div className="summary-cell">
       <span className="eyebrow">{label}</span>
       <span className="value">{costUsd}</span>
-      {parts ? (
-        <span className="sub-cost numeral" title={parts.title}>
-          {parts.parts.map((part, index) => (
-            <span key={part.label} style={{ color: part.color }}>
-              {index > 0 ? " · " : ""}
-              {part.label} {part.costUsd}
-            </span>
-          ))}
-        </span>
+      {split ? (
+        <>
+          <span
+            className="cost-strip"
+            role="img"
+            aria-label={`Money split: ${split.ariaLabel}`}
+            title={split.title}
+          >
+            {split.parts
+              .filter((part) => part.costMicros > 0)
+              .map((part) => (
+                <span key={part.key} style={{ flexGrow: part.costMicros, backgroundColor: part.color }} />
+              ))}
+          </span>
+          <span className="sub-cost numeral">
+            {split.parts.map((part, index) => (
+              <span key={part.key} style={{ color: part.color }}>
+                {index > 0 ? " · " : ""}
+                {part.label} {part.costUsd}
+              </span>
+            ))}
+          </span>
+        </>
       ) : null}
       <span
         className="sub numeral"
