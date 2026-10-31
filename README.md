@@ -4,7 +4,7 @@ Charts the dollar cost of Pi coding-agent sessions over time.
 
 **Status: built, all 8 phases.** The aggregator, SQLite store, backfill, read API, ingest
 endpoint, React dashboard, and the Pi extension all work against real session data — as of
-2026-10-29, 288 sessions, $92.75 of recorded spend, 158 passing tests. Plan and measurements in
+2026-10-31, 289 sessions, $105.80 of recorded spend, 183 passing tests. Plan and measurements in
 [DESIGN.md](./DESIGN.md); run instructions in [dashboard/README.md](./dashboard/README.md).
 
 ## Layout
@@ -20,7 +20,8 @@ Pi writes cost into every session file (`~/.pi/agent/sessions/**/*.jsonl`),
 computed from model catalog prices. The dashboard server scans those files into
 SQLite, which backfills all history. The extension pushes the session currently
 running in Pi so the dashboard updates live. A React app charts daily spend with
-project and model filters, and clicking a day opens that day's 24 hours.
+project and model filters, clicking a day opens that day's 24 hours, and `/lifetime` prints
+the whole ledger as totals, streaks, records, and a level.
 
 ## Quick start
 
