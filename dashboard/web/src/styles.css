@@ -844,6 +844,17 @@ button.ghost {
   font-size: 0.6875rem;
 }
 
+/* The all-time figure is the one number on the page that means "the whole ledger", and at the
+   shared 1.375rem it was the same size as a week's spend in the strip below it. Bigger, on a tight
+   leading (the inherited 1.5 is tuned for text lines, and a 36px number with 54px of leading is
+   mostly air), with the tracking tightened to match. The other stat cells keep 1.375rem: only the
+   hero cell is the headline. */
+.hero-totals .stat-cell .value {
+  font-size: 2.25rem;
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+
 .hero-totals,
 .record-grid,
 .streak-grid {
