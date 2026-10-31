@@ -32,6 +32,7 @@ import {
   getModelCost,
   getSessionById,
   getSessions,
+  getLifetimeStats,
   getSummary,
 } from "./queries.js";
 import { isSupportedTimeZone, offsetLabel, utcOffsetMinutes } from "./timezone.js";
@@ -309,6 +310,17 @@ export const createApp = (db, dependencies) => {
     },
   );
   app.get("/api/filters", (_req, res) => res.json(getFilters(db)));
+
+  // Whole-ledger totals, the day series a heatmap is drawn from, and the records. No range,
+  // project, or provider filters: the lifetime page reads the whole ledger, always.
+  app.get("/api/lifetime", flagParam("subagents", true), (req, res) => {
+    res.json(
+      getLifetimeStats(db, {
+        includeSubagents: req.flags.subagents,
+        timeZone: dependencies.timeZone ?? null,
+      }),
+    );
+  });
 
   app.post("/api/rescan", requireToken, (_req, res) => {
     res.json(dependencies.rescan());
