@@ -1121,6 +1121,27 @@ The drawings, all in `web/src/lifetime.js`, all pure and tested:
 The page reads one endpoint and refreshes every 60 s, not 30: these are all-time totals, and
 a session has to settle before they move.
 
+### Phone widths
+
+One breakpoint, `@media (max-width: 40rem)`, plus a `pointer: coarse` block for touch. The
+narrow layout is where the two page-minimum-width traps live, and both were measured on a 390px
+viewport (Chromium headless with CDP device metrics and touch emulation on):
+
+- **A `<select>` is as wide as its longest option.** The project filter's options are directory
+  paths, so the filter row wanted 408px inside a 364px panel head, and the page had to be 437px
+  wide — the whole ledger panned sideways on a phone. `min-width: 0` on the row, its label, and
+  the select lets them shrink with the panel, and the select clips with an ellipsis; the full path
+  is still in the option list and the tooltip.
+- **A table cannot be narrower than the widest thing in it.** Long session names were the same
+  problem at 659px. The narrow layout switches `.sessions` to `table-layout: fixed` with 46 / 30 /
+  24% columns for the three columns that survive, and the name gets an ellipsis.
+- **The activity grid picks its window from the width it will get**: 26 weeks is 364px of squares,
+  a phone card is 312px, so the phone layout draws 13 weeks (21px squares). The page listens to
+  the same `40rem` query the stylesheet uses, so the two flip together.
+- **Touch targets are 44px.** The ledger's controls are 31px, which is fine for a cursor and small
+  for a finger; the `pointer: coarse` block raises the range, theme, page, pager, and refresh
+  buttons. `pointer` rather than width, because a small tablet has the desktop's width and a finger.
+
 ---
 
 ## 11. Repository layout
@@ -1330,7 +1351,7 @@ rejects reports that are older than what is stored.
 | Token gate | Writes answer 401 without the header, 200 with it; reads answer 200 with no header |
 | LAN day buckets | Same range at `tzOffsetMinutes` 0, +240, and −240: totals identical, day splits differ |
 | Unit: `getLifetimeStats` | Totals and records over all time; day series grouped by the zone it is given (UTC vs `Pacific/Kiritimati` moves days, never totals); a zero-cost token day counts as active; the subagent filter moves totals, records, and the hour series together |
-| Unit: `lifetime.js` | Calendar maths on day strings; streak runs with today's grace day and a finished empty day breaking it; zero-cost days keeping a streak alive; the XP and level curve including exact boundaries; square-root intensity bands; week-aligned heatmap columns with zero squares; comparison lines that round away being dropped |
+| Unit: `lifetime.js` | Calendar maths on day strings; streak runs with today's grace day and a finished empty day breaking it; zero-cost days keeping a streak alive; the XP and level curve including exact boundaries; square-root intensity bands; week-aligned heatmap columns with zero squares; comparison lines that round away being dropped; the two window widths and the 312px phone card they are drawn in |
 | Unit: `router.js` | Pathname mapping: `/`, `/lifetime`, a trailing slash, and an unknown path falling back to the ledger |
 
 ---
