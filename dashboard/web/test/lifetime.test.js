@@ -23,6 +23,7 @@ import {
   levelFromXp,
   peakOf,
   rankForLevel,
+  RANKS,
   shiftDay,
   weekTotals,
   weekdayOf,
@@ -154,12 +155,36 @@ test("levelFromXp walks a power curve and reports the gap to the next level", ()
   assert.equal(levelFromXp(25_000).level, 2);
   assert.equal(levelFromXp(24_999).level, 1);
   assert.equal(levelFromXp(1_329_025).level, 12, "this machine's real total");
-  assert.equal(levelFromXp(1_329_025).rank, "Token Incinerator");
+  assert.equal(levelFromXp(1_329_025).rank, "Cache Glutton");
+});
 
+test("the rank bands are five levels wide, so a rank change lands on a round level", () => {
+  assert.deepEqual(
+    RANKS.map((entry) => entry.minLevel),
+    [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50],
+  );
+  assert.equal(
+    RANKS.map((entry, index) => entry.minLevel - (RANKS[index - 1]?.minLevel ?? 0)).join(","),
+    "1,4,5,5,5,5,5,5,5,5,5",
+    "the first band is level 1, every band after it is five levels",
+  );
+
+  // A band covers the levels before the next breakpoint, so the bar can name what is coming.
   assert.equal(rankForLevel(1), "Prompt Tinkerer");
-  assert.equal(rankForLevel(4), "Agent Wrangler");
-  assert.equal(rankForLevel(32), "Ledger Legend");
+  assert.equal(rankForLevel(4), "Prompt Tinkerer");
+  assert.equal(rankForLevel(5), "Context Hoarder");
+  assert.equal(rankForLevel(9), "Context Hoarder");
+  assert.equal(rankForLevel(10), "Cache Glutton");
+  assert.equal(rankForLevel(15), "Token Incinerator");
+  assert.equal(rankForLevel(49), "Total Token Catastrophe");
+  assert.equal(rankForLevel(50), "Ledger Legend");
   assert.equal(rankForLevel(999), "Ledger Legend", "the top rank keeps going");
+
+  assert.equal(
+    RANKS.every((entry) => entry.rank.length > 0),
+    true,
+    "no band is unnamed",
+  );
 });
 
 test("intensityFor spreads the mid-range so a record day cannot flatten the grid", () => {

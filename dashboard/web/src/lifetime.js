@@ -30,16 +30,26 @@ const LEVEL_EXPONENT = 1.6;
 /**
  * What each band of levels is called. `minLevel` is the lowest level carrying that rank, and
  * the list is read in order, so the last rank that fits wins.
+ *
+ * The bands are five levels wide, so a rank change lands on a round level a person can see
+ * coming (level 15 is Token Incinerator, and the bar says how far off it is). The names are the
+ * roast, not the honor: every one of them is about volume burned rather than work done, which
+ * is what a page of $105.80 and 1.33B tokens actually is.
+ *
  * @type {{ minLevel: number, rank: string }[]}
  */
 export const RANKS = [
   { minLevel: 1, rank: "Prompt Tinkerer" },
-  { minLevel: 4, rank: "Agent Wrangler" },
-  { minLevel: 8, rank: "Context Alchemist" },
-  { minLevel: 12, rank: "Token Incinerator" },
-  { minLevel: 16, rank: "Cache Whisperer" },
-  { minLevel: 22, rank: "Autonomous Overlord" },
-  { minLevel: 32, rank: "Ledger Legend" },
+  { minLevel: 5, rank: "Context Hoarder" },
+  { minLevel: 10, rank: "Cache Glutton" },
+  { minLevel: 15, rank: "Token Incinerator" },
+  { minLevel: 20, rank: "Verbosity Engine" },
+  { minLevel: 25, rank: "Inference Arsonist" },
+  { minLevel: 30, rank: "Money Furnace" },
+  { minLevel: 35, rank: "Compute Pyromaniac" },
+  { minLevel: 40, rank: "Silicon Incinerator" },
+  { minLevel: 45, rank: "Total Token Catastrophe" },
+  { minLevel: 50, rank: "Ledger Legend" },
 ];
 
 /** Weekday names, indexed by the 0-6 number a calendar day resolves to. @type {string[]} */
