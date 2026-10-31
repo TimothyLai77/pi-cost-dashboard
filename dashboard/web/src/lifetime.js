@@ -361,7 +361,7 @@ export const QUIPS = [
   "Your agent is thinking very hard about being wrong.",
   "Congratulations on automating a task that took 11 seconds.",
   "You gotta keep the AI bubble inflated somehow...",
-  "Context window looking looking a little empty. Are you even trying to warm the planet?",
+  "Context window looking a little empty. Are you even trying to warm the planet?",
   "Spending $0.40 in API fees to save $0.02 of human effort.",
   "A 40-step agent loop just to return null.",
   "Burning carbon so you don't have to write a Regex.",
