@@ -16,7 +16,7 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 158 tests
+npm test             # 183 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
@@ -108,7 +108,7 @@ dashboard/
 │   ├── index.js            # express app; createApp() is exported for tests
 │   ├── db.js               # better-sqlite3 handle + migration runner
 │   ├── upsert.js           # guarded session upsert, shared by scan and ingest
-│   ├── queries.js          # summary, daily, sessions, models, filters, health
+│   ├── queries.js          # summary, daily, sessions, models, flows, lifetime stats, health
 │   ├── migrations/         # numbered .sql with .down.sql partners
 │   ├── scanner/
 │   │   ├── aggregate.js    # one session file -> { session, events }   (pure)
@@ -127,12 +127,18 @@ dashboard/
         ├── App.jsx
         ├── api.js
         ├── hourly.js       # drill-down cache: hover prefetch, keyed by day + filters
+        ├── lifetime.js     # streaks, level + XP, heatmap buckets, comparisons (pure, tested)
+        ├── router.js       # popstate router: / is the ledger, /lifetime is the lifetime board
         ├── theme.js        # Auto / Light / Dark, persisted, follows the system in Auto
         ├── styles.css
+        ├── pages/
+        │   └── LifetimePage.jsx
         └── components/
             ├── SummaryCards.jsx
             ├── CostChart.jsx
             ├── ModelBreakdown.jsx
+            ├── PageNav.jsx      # the Ledger / Lifetime tabs
+            ├── ThemeControls.jsx
             └── SessionTable.jsx
 ```
 
@@ -162,6 +168,7 @@ a token, so `/favicon.svg` resolves on a bare page load.
 | `GET` | `/api/models` | spend by provider and model |
 | `GET` | `/api/flows?metric&limit&from&to&cwd&provider&subagents` | model→project bands: nodes and links, top `limit` per side with an `all other` roll-up |
 | `GET` | `/api/filters` | project and provider values for the controls |
+| `GET` | `/api/lifetime?subagents` | whole-ledger totals, day series, hour-of-day and weekday series, record rows |
 | `GET` | `/api/health` | counts, schema version, last scan |
 | `GET` | `/api/config` | zone the server buckets in, its offset label, and where the setting came from |
 | `POST` | `/api/rescan` | force a full rescan |
@@ -186,6 +193,15 @@ node that carries the full totals of what it absorbed; `dropped.rolled` counts t
 folded away, `dropped.flows` counts the pairs with none of the chosen metric, and `totals`
 always describes the whole filtered window — so the page can say how much of the bill the
 drawing covers instead of implying it is the whole bill.
+
+`/api/lifetime` is the whole record in one request: `totals` (money in the four parts, tokens
+in the four kinds, sessions, model calls, active days, days on record), `counts` (messages,
+tool calls, projects, models), `daily` (one point per day that recorded usage, same point shape
+as `/api/daily`), `hoursOfDay`, `weekdays`, and `records` (busiest day, biggest call, longest
+session, top project, top model, and friends). It takes no range and no filters — "lifetime" is
+the whole ledger by definition — and a day counts as active when it recorded tokens, not money,
+so a day of zero-priced local-model work is not a gap. Days are grouped in JavaScript by the
+same zone-aware bucketing the charts use, so a day here is the same day as a bar on the chart.
 
 Every aggregate also takes `subagents=1` (default, count nested sessions) or
 `subagents=0` (only what each session paid directly). A subagent is billed as its
@@ -256,6 +272,18 @@ tokens, and each rollup against both its own facts and the session file it came 
 
 ## Notes from building this
 
+- **Two pages, no router library.** `web/src/router.js` is a `popstate` listener and one state
+   value: `pushState` swaps the page in place, back and forward re-render for the URL the
+   history landed on, and a deep link to `/lifetime` is a normal request answered by the
+   server's existing catch-all (every non-`/api/` path gets `index.html`), with Vite's SPA
+   fallback covering the dev server. Two pages do not justify a routing dependency, and
+   `AGENTS.md` requires approving one first.
+- **A day counts when it records tokens, not money.** Most usage on this machine runs on local
+   models with no catalog price, so streaks, active days, and the default activity grid are all
+   measured in tokens. A money-based streak breaks on exactly the days that did the most work:
+   2026-10-20 here spent $0.00 across 24 sessions and 54.9M tokens, and counts as active. The
+   grid's Money / Tokens toggle exists because the two units tell different stories about the
+   same day, and the squares take the hue of the unit they are sized in.
 - **Chart swaps fade, they do not swap.** The daily and hourly charts are layers in one grid
    cell, so the panel is always the same height; the drill-down fades over ~250 ms with the
    daily chart staying under it, and a "hours…" pill covers the wait. `web/src/hourly.js`

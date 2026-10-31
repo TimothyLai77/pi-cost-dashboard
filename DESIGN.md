@@ -563,6 +563,7 @@ Server-side, in this order:
 | `GET` | `/api/sessions/:id` | One session, full totals and events |
 | `GET` | `/api/models` | Per-model spend, from `model_cost` |
 | `GET` | `/api/flows?metric&limit&from&to&cwd&provider&subagents` | Model→project graph: nodes, links, roll-up and drop counts |
+| `GET` | `/api/lifetime?subagents` | Whole-ledger totals, day series, hour-of-day and weekday series, record rows |
 | `POST` | `/api/rescan` | Run an incremental scan now, report what changed |
 | `GET` | `/api/health` | DB path, session count, last scan time, schema version |
 
@@ -617,6 +618,32 @@ same project and provider filters, and returns all 24 hours including the empty 
 so an idle hour is a visible zero rather than a missing bar. Cost lands in the hour the
 usage happened, which is the same basis as the daily chart: a session that starts at
 23:00 and runs past midnight bills its usage to both hours.
+
+`/api/lifetime` answers the question the ledger panels cannot: what the whole record adds
+up to. No `from`, no `to`, no project, no provider — it is the ledger's whole span, and the
+page that reads it has no filters to send. It returns five blocks of facts:
+
+| Block | Contents |
+|---|---|
+| `totals` | Cost in the four parts, tokens in the four kinds, sessions with usage, model calls, `activeDays`, `calendarDays` |
+| `counts` | Sessions on record, messages, tool calls and results, distinct projects, distinct models |
+| `daily` | One point per day that recorded usage, in the same point shape `/api/daily` returns |
+| `hoursOfDay` | 24 buckets of cost, tokens, and calls, by wall-clock hour in `PI_COST_TZ` |
+| `weekdays` | Seven buckets of cost, tokens, and day counts, Sunday first |
+| `records` | Most expensive day, biggest token day, most sessions in a day, priciest session, longest session, priciest single call, top project and top model by cost and by tokens |
+
+Two rules decide the numbers. Days are grouped in JavaScript by `localDay`, the same
+bucketing the daily chart uses, so a day on the lifetime page is the same day as a bar on the
+chart and a year-long window cannot be broken by a fixed UTC offset. And an active day is a
+day that recorded **tokens**, not money: most usage on this machine runs on local models
+priced at zero, so a money-based day count calls a hard day of local-model work a gap, and a
+money-based streak breaks on exactly the days that did the most.
+
+The endpoint stops at facts. Streak lengths, level and XP, square darkness, and the
+coffees-and-novels comparisons are drawings over these facts and live in
+`web/src/lifetime.js` next to the page that draws them, in the same split as `costParts.js`
+and `flowGraph.js`: the server answers questions about the ledger, the page decides what is
+worth comparing.
 
 ---
 
@@ -1050,6 +1077,45 @@ Measured on the built app with recorded API payloads: panel 444 px, chart frame 
 in ~6.2 s (daily chart visible with the pill the whole time, then the fade) and a cached day
 fading over ~250 ms with no request at all.
 
+### The lifetime page
+
+`/lifetime` is the second page: the whole ledger as totals, streaks, records, and an activity
+grid. It is a page, not a panel on the ledger, because it answers a different question — the
+ledger is about this week, this page is about everything — and it has no filters, since
+"lifetime" is the whole record by definition.
+
+Routing is a `popstate` listener and one state value (`web/src/router.js`), with two tabs in
+the masthead. No routing library: two pages do not justify one, and a dependency needs
+approval first (§11). `pushState` swaps the page in place, `popstate` follows the back button,
+and a deep link to `/lifetime` is a real request answered by the server's existing catch-all,
+which already sends `index.html` for every non-`/api/` path. Vite's SPA fallback covers the
+dev workflow, so the URL survives a reload in both modes.
+
+The drawings, all in `web/src/lifetime.js`, all pure and tested:
+
+- **Streaks** are runs of consecutive days that recorded tokens. Today is a grace day: on a
+  day with no usage yet, the streak is measured as of yesterday, because the day is not over.
+  A full empty day ends it, and the page says how many days ago that was.
+- **Level** comes from XP: 1 XP per 1k tokens, 1 XP per $0.10. Tokens are the volume knob and
+  money is the premium knob, in that order on purpose: a day of zero-priced local-model work
+  earns nearly the same XP as the same day on a paid model, so the level tracks work done,
+  not money burned. Levels grow on a power curve (`25,000 × (n−1)^1.6`), so each one takes
+  longer than the last, and the gap to the next is also translated into tokens — "3,361 XP" is
+  abstract, "about 3.4M tokens" is one short session.
+- **The activity grid** is 26 week columns, Sunday at the top, sized in tokens by default
+  because a money-sized grid has holes in the days that did the most work. Square darkness is
+  a square-root scale of the window's maximum, so one record day cannot flatten every ordinary
+  day into the lightest band. The unit is a Money / Tokens toggle, and the squares take the
+  hue of the unit they are sized in: cool steel for tokens, the ledger's warm ink for money.
+- **The comparisons** translate the totals into things a person can picture (lattes, hours of
+  typing replaced, pages of prose). They are estimates at fixed published rates, labelled as
+  estimates on the panel and with the rate in each line's tooltip. Prose lines use fresh
+  tokens only — input, output, cache write — because cache reads are the same context re-read
+  on every call, not text anyone wrote.
+
+The page reads one endpoint and refreshes every 60 s, not 30: these are all-time totals, and
+a session has to settle before they move.
+
 ---
 
 ## 11. Repository layout
@@ -1076,7 +1142,7 @@ pi-cost-dashboard/
     │   ├── migrations/
     │   │   └── 001_init.sql    # UP + DOWN, reversible
     │   ├── ingest.js           # POST /api/ingest: validate + guarded upsert
-    │   ├── queries.js          # summary, daily, sessions, models
+    │   ├── queries.js          # summary, daily, sessions, models, lifetime stats
     │   └── scanner/
     │       ├── aggregate.js    # one file -> { session, events }  (pure)
     │       └── scan.js         # directory walk + scan_state cache
@@ -1087,10 +1153,19 @@ pi-cost-dashboard/
             ├── main.jsx
             ├── App.jsx
             ├── api.js
+            ├── hourly.js       # drill-down cache: hover prefetch, keyed by day + filters
+            ├── lifetime.js     # streaks, level, heatmap, comparisons (pure, tested)
+            ├── router.js       # popstate router for / and /lifetime
+            ├── theme.js        # Auto / Light / Dark, persisted
+            ├── styles.css
+            ├── pages/
+            │   └── LifetimePage.jsx
             └── components/
                 ├── SummaryCards.jsx
                 ├── CostChart.jsx
                 ├── ModelBreakdown.jsx
+                ├── PageNav.jsx
+                ├── ThemeControls.jsx
                 └── SessionTable.jsx
 ```
 
@@ -1249,6 +1324,9 @@ rejects reports that are older than what is stored.
 | Ingest, push-fed | A push may replace a push; a push with fewer entries than the stored row is refused |
 | Token gate | Writes answer 401 without the header, 200 with it; reads answer 200 with no header |
 | LAN day buckets | Same range at `tzOffsetMinutes` 0, +240, and −240: totals identical, day splits differ |
+| Unit: `getLifetimeStats` | Totals and records over all time; day series grouped by the zone it is given (UTC vs `Pacific/Kiritimati` moves days, never totals); a zero-cost token day counts as active; the subagent filter moves totals, records, and the hour series together |
+| Unit: `lifetime.js` | Calendar maths on day strings; streak runs with today's grace day and a finished empty day breaking it; zero-cost days keeping a streak alive; the XP and level curve including exact boundaries; square-root intensity bands; week-aligned heatmap columns with zero squares; comparison lines that round away being dropped |
+| Unit: `router.js` | Pathname mapping: `/`, `/lifetime`, a trailing slash, and an unknown path falling back to the ledger |
 
 ---
 
