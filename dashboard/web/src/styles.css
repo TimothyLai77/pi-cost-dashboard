@@ -325,6 +325,26 @@ body {
   color: var(--ink);
 }
 
+/* The drawer's close control, at the head of the rail on the phone layout. */
+.rail-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.rail-close:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
 .rail-nav {
   display: flex;
   flex-direction: column;
@@ -1369,8 +1389,9 @@ button.ghost {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* Top padding leaves room for the fixed menu button above the masthead title. */
   .page {
-    padding: var(--space-4) var(--space-3) var(--space-5);
+    padding: 3.25rem var(--space-3) var(--space-5);
   }
 
   /* The rail is off screen on a phone: 12rem of a 390px screen is a third of the width for two
@@ -1380,8 +1401,56 @@ button.ghost {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Below the breakpoint the rail becomes a drawer: fixed, parked off screen to the left, and
+     pulled over the page. 17rem wide, which leaves a slice of the page visible beside it on a
+     390px screen, and always expanded - a drawer of glyphs alone is not a menu. */
   .rail {
-    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 20;
+    width: min(17rem, 84vw);
+    height: 100vh;
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform 220ms ease-out;
+    box-shadow: 0 0 24px rgb(0 0 0 / 0.25);
+  }
+
+  .rail[data-open="true"] {
+    transform: none;
+  }
+
+  /* The scrim is a button with tabIndex -1, so it is not a tab stop: a tap on it closes the
+     drawer, and the keyboard route is Escape, which AppShell listens for. */
+  .rail-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 19;
+    padding: 0;
+    border: 0;
+    background: rgb(0 0 0 / 0.45);
+    cursor: pointer;
+  }
+
+  /* The menu button is the shell's, not the masthead's: the masthead belongs to the page, and the
+     control that opens the app-level nav is not the page's. Fixed in the top-left corner, with the
+     page's top padding grown so the masthead title starts under it. */
+  .rail-menu {
+    position: fixed;
+    top: 0.5rem;
+    left: 0.5rem;
+    z-index: 16;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    border: 1px solid var(--rule-strong);
+    background: var(--paper-raised);
+    color: var(--ink);
+    cursor: pointer;
   }
 
   .summary-grid {

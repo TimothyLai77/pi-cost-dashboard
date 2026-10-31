@@ -21,6 +21,7 @@ import { useHourlyDrill } from "./hourly.js";
 import { useTheme } from "./theme.js";
 import { useRoute } from "./router.js";
 import { AppRail } from "./components/AppRail.jsx";
+import { IconMenu } from "./components/icons.jsx";
 import { CostChart } from "./components/CostChart.jsx";
 import { FlowsChart } from "./components/FlowsChart.jsx";
 import { HourChart } from "./components/HourChart.jsx";
@@ -516,8 +517,44 @@ const AppShell = () => {
   // `null` means "follow the viewport"; a click on the rail's control pins the opposite.
   const [pinnedCollapse, setPinnedCollapse] = useState(null);
   const collapsed = pinnedCollapse ?? !wideViewport;
+  // The phone drawer: the rail is off screen below 40rem, and this says whether it is open.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Closing happens while the menu button is unmounted, so focus goes back to it in an effect
+  // once it is on screen again - focusing the ref inside the click handler lands on `<body>`.
+  const [restoreFocusToMenu, setRestoreFocusToMenu] = useState(false);
+  const menuButtonRef = useRef(null);
 
   useEffect(() => setPinnedCollapse(null), [wideViewport]);
+
+  // Widening past the phone breakpoint closes the drawer: it is a phone control, and a window
+  // that grew should not be showing an overlay over the rail that is now on screen.
+  useEffect(() => {
+    if (!isPhone) setDrawerOpen(false);
+  }, [isPhone]);
+
+  // The drawer is modal: content behind it is `inert`, so the tab order is the rail's own
+  // controls and nothing else. Opening focuses the close control (the convention for a dialog),
+  // Escape closes and hands focus back to the button that opened it.
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    document.querySelector(".rail-close")?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") closeDrawer();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [drawerOpen]);
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setRestoreFocusToMenu(true);
+  };
+
+  useEffect(() => {
+    if (!restoreFocusToMenu || drawerOpen) return;
+    menuButtonRef.current?.focus();
+    setRestoreFocusToMenu(false);
+  }, [restoreFocusToMenu, drawerOpen]);
 
   const page =
     path === "/lifetime" ? (
@@ -532,11 +569,37 @@ const AppShell = () => {
         path={path}
         navigate={navigate}
         theme={theme}
-        collapsed={collapsed}
+        collapsed={isPhone ? false : collapsed}
         onToggleCollapse={() => setPinnedCollapse(!collapsed)}
         isPhone={isPhone}
+        open={drawerOpen}
+        onCloseDrawer={isPhone ? closeDrawer : undefined}
       />
-      <div className="shell-body">{page}</div>
+      {/* A button rather than a div: it is reachable by keyboard, and Escape closes the drawer
+          from anywhere on the page. */}
+      {isPhone && drawerOpen && (
+        <button
+          type="button"
+          className="rail-scrim"
+          tabIndex={-1}
+          aria-hidden="true"
+          onClick={closeDrawer}
+        />
+      )}
+      {isPhone && !drawerOpen && (
+        <button
+          ref={menuButtonRef}
+          type="button"
+          className="rail-menu"
+          aria-label="Open the menu"
+          aria-haspopup="dialog"
+          aria-expanded={false}
+          onClick={() => setDrawerOpen(true)}
+        >
+          <IconMenu />
+        </button>
+      )}
+      <div className="shell-body" inert={isPhone && drawerOpen}>{page}</div>
     </div>
   );
 };

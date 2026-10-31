@@ -11,7 +11,8 @@
  * collapsed rail says the same thing the expanded one does.
  *
  * Below the 40rem breakpoint the rail is off screen until the menu button opens it as a
- * drawer (see `App.jsx`, which owns the media queries and the open state).
+ * drawer (see `AppShell` in `App.jsx`, which owns the media queries, the open state, and the
+ * scrim). `open` only matters there; on a desktop the rail is always on screen.
  */
 
 import { ROUTES } from "../router.js";
@@ -64,12 +65,13 @@ const ThemeCycle = ({ theme }) => {
  *   collapsed: boolean,
  *   onToggleCollapse: () => void,
  *   isPhone: boolean,
- *   onCloseDrawer?: () => void,
+ *   open: boolean, - drawer state on the phone layout, for the `data-open` attribute
+ *   onCloseDrawer?: () => void, - present only on the phone layout
  * }} props
  * @returns {JSX.Element}
  */
-export const AppRail = ({ path, navigate, theme, collapsed, onToggleCollapse, isPhone, onCloseDrawer }) => (
-  <aside className="rail" data-collapsed={collapsed ? "true" : "false"}>
+export const AppRail = ({ path, navigate, theme, collapsed, onToggleCollapse, isPhone, open, onCloseDrawer }) => (
+  <aside className="rail" data-collapsed={collapsed ? "true" : "false"} data-open={open ? "true" : "false"}>
     <div className="rail-top">
       <span className="rail-brand">
         <span className="rail-mark" aria-hidden="true">
@@ -116,18 +118,22 @@ export const AppRail = ({ path, navigate, theme, collapsed, onToggleCollapse, is
 
     <div className="rail-theme">{collapsed ? <ThemeCycle theme={theme} /> : <ThemeControls theme={theme} />}</div>
 
-    <button
-      type="button"
-      className="rail-toggle"
-      aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
-      aria-expanded={!collapsed}
-      title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
-      onClick={onToggleCollapse}
-    >
-      <span className="rail-icon">
-        <IconChevron direction={collapsed ? "right" : "left"} />
-      </span>
-      <span className="rail-label">{collapsed ? "Expand" : "Collapse"}</span>
-    </button>
+    {/* The collapse control is a desktop control: the drawer is always expanded, so on a phone it
+        would be a button with nothing to do. */}
+    {isPhone ? null : (
+      <button
+        type="button"
+        className="rail-toggle"
+        aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+        aria-expanded={!collapsed}
+        title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+        onClick={onToggleCollapse}
+      >
+        <span className="rail-icon">
+          <IconChevron direction={collapsed ? "right" : "left"} />
+        </span>
+        <span className="rail-label">{collapsed ? "Expand" : "Collapse"}</span>
+      </button>
+    )}
   </aside>
 );
