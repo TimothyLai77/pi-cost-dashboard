@@ -25,6 +25,8 @@ import {
   peakOf,
   pickQuip,
   QUIPS,
+  QUIP_ROTATION_MS,
+  QUIP_TYPE_MS,
   quipSeedFor,
   weekTotals,
   xpFromTotals,
@@ -139,9 +141,6 @@ const Panel = ({ title, actions, children }) => (
   </section>
 );
 
-/** Seconds a commentary line stays up before the strip walks to the next one. */
-const QUIP_INTERVAL_MS = 9_000;
-
 /**
  * The commentary strip under the level bar: one line at a time from `QUIPS`.
  *
@@ -155,6 +154,11 @@ const QUIP_INTERVAL_MS = 9_000;
  * - `prefers-reduced-motion` means no timer at all, so the line is chosen and stays put.
  * - The box is two lines tall whatever the line says, so the panels under the card do not jump
  *   every nine seconds, and a line over the budget clamps with an ellipsis.
+ * - The line types itself out, one character at a time, and the caret keeps blinking after it.
+ *   Hovering finishes the line in one go: stopping the animation should mean "let me read this",
+ *   not "freeze it mid-word", and moving the pointer away resumes from where it stopped rather
+ *   than restarting the line. A pure-CSS typewriter is not on the table - the line wraps to two
+ *   lines, and a `steps()` width animation can only reveal one.
  *
  * `aria-live="off"` because the text is commentary: a live region that changes every nine seconds
  * is a screen reader reading the page out loud forever.
@@ -166,29 +170,49 @@ const QuipStrip = ({ seed }) => {
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const [rotation, setRotation] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [typedCount, setTypedCount] = useState(0);
+
+  const index = pickQuip(QUIPS, seed, rotation);
+  const text = index === null ? "" : QUIPS[index];
 
   useEffect(() => {
     if (reducedMotion || paused || QUIPS.length < 2) return undefined;
-    const timer = setInterval(() => setRotation((step) => step + 1), QUIP_INTERVAL_MS);
+    const timer = setInterval(() => setRotation((step) => step + 1), QUIP_ROTATION_MS);
     return () => clearInterval(timer);
   }, [reducedMotion, paused]);
 
-  const index = pickQuip(QUIPS, seed, rotation);
+  // A new line starts empty; the same line keeps whatever it had already revealed.
+  useEffect(() => {
+    setTypedCount(0);
+  }, [text]);
+
+  useEffect(() => {
+    if (text.length === 0) return undefined;
+    if (reducedMotion || paused) {
+      setTypedCount(text.length);
+      return undefined;
+    }
+    if (typedCount >= text.length) return undefined;
+    const timer = setInterval(() => setTypedCount((count) => Math.min(count + 1, text.length)), QUIP_TYPE_MS);
+    return () => clearInterval(timer);
+  }, [text, typedCount, reducedMotion, paused]);
+
   if (index === null) return null;
 
   return (
     <span
-      key={index}
       className="quip"
       role="note"
       aria-live="off"
       tabIndex={0}
+      title={text}
+      data-typing={typedCount < text.length ? "true" : "false"}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
     >
-      {QUIPS[index]}
+      {text.slice(0, typedCount)}
     </span>
   );
 };

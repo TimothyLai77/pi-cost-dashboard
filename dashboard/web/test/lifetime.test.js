@@ -24,6 +24,8 @@ import {
   peakOf,
   pickQuip,
   QUIPS,
+  QUIP_ROTATION_MS,
+  QUIP_TYPE_MS,
   quipSeedFor,
   rankForLevel,
   RANKS,
@@ -292,11 +294,22 @@ test("the commentary strip picks a line that walks the list without repeats", ()
   assert.notEqual(quipSeedFor("2026-10-31"), quipSeedFor("2026-11-01"), "a new day is a new start");
   assert.equal(quipSeedFor(undefined) >= 0, true, "a missing day seeds 0, not NaN");
 
-  const overlong = QUIPS.filter((line) => typeof line !== "string" || line.length === 0 || line.length > 110);
+  const lines = QUIPS.filter(
+    (line) => typeof line !== "string" || line.length === 0 || line.length > 110,
+  );
   assert.deepEqual(
-    overlong,
+    lines,
     [],
     "every line is text that fits the strip's two-line box (~110 characters)",
+  );
+
+  // Typing is the strip's entrance, so it has to finish inside the rotation window and leave
+  // most of it for reading the line. A long line is caught here, not on the page.
+  const longest = Math.max(0, ...QUIPS.map((line) => line.length));
+  assert.equal(
+    longest * QUIP_TYPE_MS <= QUIP_ROTATION_MS / 2,
+    true,
+    `the longest line types in ${longest * QUIP_TYPE_MS}ms of a ${QUIP_ROTATION_MS}ms window`,
   );
 });
 

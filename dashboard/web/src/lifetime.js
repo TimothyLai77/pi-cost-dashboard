@@ -378,7 +378,35 @@ export const QUIPS = [
   "Four agents, two dozen tool calls, zero useful outcomes.",
   "Who is JSON?",
   "Somewhere, a GPU is collateralizing another GPU.",
+  "Nobody has read this output. Nobody.",
+  "The agent has read your file eleven times. It is not learning.",
+  "Six tool calls to find out what your shell history already knew.",
+  "The plan was good. The plan was also 9,000 tokens.",
+  "Every compaction is a small amnesia you paid for.",
+  "This session cost more than the feature is worth. Ship it.",
 ];
+
+/**
+ * Milliseconds a commentary line stays up before the strip walks to the next one.
+ *
+ * Exported from the pure module rather than kept in the page because the typing budget is
+ * measured against it: a line that takes longer to type than the window it is shown in is a bug
+ * the tests can see, and they cannot see into a component.
+ *
+ * @type {number}
+ */
+export const QUIP_ROTATION_MS = 9_000;
+
+/**
+ * Milliseconds per character of the commentary strip's typing animation.
+ *
+ * The budget is the rotation: the longest line in the list has to finish typing with time left to
+ * read it, and `lifetime.test.js` enforces that (110 characters at this speed is 2.9s of a 9s
+ * window, so more than two thirds of the time is spent on a finished, readable line).
+ *
+ * @type {number}
+ */
+export const QUIP_TYPE_MS = 26;
 
 /**
  * Which commentary line to show.

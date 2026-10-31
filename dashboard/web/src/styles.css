@@ -919,9 +919,8 @@ button.ghost {
      padding plus two lines - one line and two lines take exactly the same room (measured: card
      height 176px with a one-line quip and 176px with a two-line quip at 1280) - and anything
      over the budget clamps with an ellipsis.
-   - The fade is an entering animation keyed to the line, not a timer. React remounts the span
-     when the index changes, so the animation replays by itself, and the reduced-motion block
-     below turns it off along with the strip's own timer. */
+   - The line types out one character at a time, which is why the height has to be fixed: the
+     text grows from nothing to two lines, and it does that inside a box that never changes size. */
 .quip {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -930,21 +929,35 @@ button.ghost {
   margin-top: var(--space-3);
   padding-top: var(--space-3);
   border-top: 1px dotted var(--rule-strong);
-  min-height: calc(2 * 1.35em);
   height: calc(var(--space-3) + 2 * 1.35em);
   max-width: 46rem;
   color: var(--ink-soft);
   font-size: 0.8125rem;
   line-height: 1.35;
-  animation: quip-in 400ms ease;
 }
 
-@keyframes quip-in {
-  from {
-    opacity: 0;
-  }
-  to {
+/* The caret is the strip's own blink, and it keeps blinking after the line finishes: it is the
+   signal that this strip is alive. It is a pseudo-element, so it is not in the accessibility
+   tree, and the reduced-motion block below flattens the blink along with the typing. */
+.quip::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: quip-caret 1.1s steps(1, end) infinite;
+}
+
+@keyframes quip-caret {
+  0%,
+  49.9% {
     opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
   }
 }
 
