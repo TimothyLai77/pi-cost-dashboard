@@ -117,6 +117,10 @@ th,
 .live-tag,
 .bar-fill,
 .eyebrow,
+.stat-cell,
+.heat-cell,
+.level-bar,
+.level-bar-fill,
 p {
   transition:
     background-color 120ms ease,
@@ -773,7 +777,274 @@ button.ghost {
   font-size: 0.8125rem;
 }
 
+/* --- lifetime page: stat cells, level, streaks, records --- */
+
+/* One cell of the lifetime page: a label, a figure, and one line of context. The grids that
+   hold them are hairline-separated the way the summary strip is, so a record board reads as a
+   ledger and not as a wall of cards. */
+.stat-cell {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+  background: var(--paper-raised);
+  padding: var(--space-3) var(--space-4);
+}
+
+.stat-cell .value {
+  font-family: var(--font-numeral);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.375rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+/* Money keeps the ledger's warm ink, a live count (the streak that is running now) takes the
+   cool accent, and everything else stays ink so a board of twelve figures has a hierarchy. */
+.stat-cell[data-tone="money"] .value {
+  color: var(--money);
+}
+
+.stat-cell[data-tone="live"] .value {
+  color: var(--live);
+}
+
+.stat-cell .sub {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}
+
+.hero-totals,
+.record-grid,
+.streak-grid {
+  display: grid;
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+
+.hero-totals {
+  grid-template-columns: minmax(15rem, 1fr) minmax(20rem, 1.5fr);
+}
+
+.record-grid {
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.streak-grid {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+}
+
+/* The sentence under the streak spans the row: it is the page's one nudge, and it needs the
+   width of the figures it refers to. */
+.streak-nudge {
+  grid-column: 1 / -1;
+  margin: 0;
+  background: var(--paper-raised);
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+}
+
+/* Level banner: the number, the rank it names, and the bar toward the next one. */
+.level-card {
+  display: grid;
+  gap: var(--space-2);
+  align-content: center;
+  background: var(--paper-raised);
+  padding: var(--space-3) var(--space-4);
+}
+
+.level-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.level-rank {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+}
+
+.level-bar {
+  display: block;
+  height: 10px;
+  background: var(--rule);
+}
+
+.level-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--live);
+}
+
+.level-note {
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.level-legend {
+  font-size: 0.625rem;
+  opacity: 0.85;
+}
+
+/* --- lifetime page: activity grid --- */
+
+/* Week columns, Sunday at the top. The squares are the width of a chart tick (11px) so 26
+   weeks fit a ledger page without scrolling, and the grid scrolls on its own when they do not. */
+.heatmap-body {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.heatmap-weeks {
+  display: grid;
+  grid-template-rows: repeat(7, 11px);
+  gap: 3px;
+  /* Lines up with the squares, so it starts under the month row: 10px of label plus the gap. */
+  padding-top: calc(10px + var(--space-1));
+  color: var(--ink-faint);
+}
+
+.heatmap-weeks span {
+  height: 11px;
+  line-height: 11px;
+  text-align: center;
+}
+
+.heatmap-main {
+  display: grid;
+  gap: var(--space-1);
+  justify-content: start;
+  overflow-x: auto;
+}
+
+/* One label per column, wider than the column it sits over. The text is allowed to spill and
+   overlap the empty space of the next columns, which is how a month tick reads on a grid. */
+.heatmap-months {
+  display: flex;
+  gap: 3px;
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+}
+
+.heatmap-months span {
+  flex: 0 0 11px;
+  white-space: nowrap;
+  color: var(--ink-faint);
+}
+
+.heatmap-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 11px);
+  grid-auto-columns: 11px;
+  gap: 3px;
+  justify-content: start;
+}
+
+/* Square darkness. The hue follows the unit the squares are sized in, so the grid is visibly
+   a money grid or a tokens grid rather than a neutral blob: cool steel for tokens, the ledger's
+   warm ink for money. `color-mix` steps the hue against the panel, and the plain `--rule`
+   declared first is the track a browser without color-mix still shows. */
+.heat-cell {
+  width: 11px;
+  height: 11px;
+  background: var(--rule);
+  --heat-hue: var(--volume);
+}
+
+.heatmap[data-metric="cost"] .heat-cell {
+  --heat-hue: var(--money);
+}
+
+.heat-cell[data-level="1"] {
+  background: color-mix(in srgb, var(--heat-hue) 22%, var(--paper-raised));
+}
+
+.heat-cell[data-level="2"] {
+  background: color-mix(in srgb, var(--heat-hue) 45%, var(--paper-raised));
+}
+
+.heat-cell[data-level="3"] {
+  background: color-mix(in srgb, var(--heat-hue) 70%, var(--paper-raised));
+}
+
+.heat-cell[data-level="4"] {
+  background: var(--heat-hue);
+}
+
+.heatmap-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.heatmap-foot .spacer {
+  flex: 1;
+}
+
+.heat-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-numeral);
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* --- lifetime page: the comparisons --- */
+
+/* Each line is a figure and the thing it equals, on one rule. The rate behind it is in the
+   tooltip: these are translations, and the page says so rather than dressing them as totals. */
+.comparisons {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+
+.comparisons li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  border-left: 2px solid var(--rule-strong);
+  padding-left: var(--space-3);
+}
+
+.comparisons .value {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.comparisons .label {
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+}
+
+.panel-note {
+  margin: var(--space-4) 0 0;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}
+
 @media (max-width: 40rem) {
+  /* Two hero columns become one, and the level bar keeps its full width. */
+  .hero-totals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .page {
     padding: var(--space-4) var(--space-3) var(--space-5);
   }

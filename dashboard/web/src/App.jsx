@@ -1,5 +1,9 @@
 /**
- * Dashboard root: owns the filter state the chart, model list, and session table share.
+ * Dashboard root: the app's two pages, and the filter state the ledger's panels share.
+ *
+ * The route comes from the browser's history (see router.js): `/` is the ledger, `/lifetime` is
+ * the lifetime board. Both are the same Express origin, so switching pages is a `pushState` and
+ * a re-render, and a deep link to `/lifetime` is answered by the server's own catch-all.
  *
  * Range is expressed as a day count so the chart can ask for a window; "all" sends no
  * bounds and the server returns the full recorded history.
@@ -9,13 +13,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useApi } from "./api.js";
 import { useHourlyDrill } from "./hourly.js";
-import { PREFERENCES, useTheme } from "./theme.js";
+import { useTheme } from "./theme.js";
+import { useRoute } from "./router.js";
 import { CostChart } from "./components/CostChart.jsx";
 import { FlowsChart } from "./components/FlowsChart.jsx";
 import { HourChart } from "./components/HourChart.jsx";
 import { ModelBreakdown } from "./components/ModelBreakdown.jsx";
+import { PageNav } from "./components/PageNav.jsx";
 import { SessionTable } from "./components/SessionTable.jsx";
 import { SummaryCards } from "./components/SummaryCards.jsx";
+import { ThemeControls } from "./components/ThemeControls.jsx";
+import { LifetimePage } from "./pages/LifetimePage.jsx";
 
 const RANGES = [
   { label: "30d", days: 30 },
@@ -26,16 +34,6 @@ const RANGES = [
 
 /** Seconds between automatic refreshes, so a running session's numbers move on their own. */
 const REFRESH_INTERVAL_MS = 30_000;
-
-/** What each theme setting does, in the words shown on the control. @type {Record<string, string>} */
-const THEME_LABELS = { auto: "Auto", light: "Light", dark: "Dark" };
-
-/** Why each theme setting exists, as the hover and accessibility description. */
-const THEME_HINTS = {
-  auto: "Follow the operating system's light or dark appearance, and keep following it",
-  light: "Always use the light ledger palette",
-  dark: "Always use the dark slate palette",
-};
 
 /**
  * @param {{ title: string, children: React.ReactNode, actions?: React.ReactNode }} props
@@ -66,7 +64,13 @@ const ErrorState = ({ message, hint }) => (
   </div>
 );
 
-export const App = () => {
+/**
+ * The ledger page: summary strip, daily chart with the hour drill-down, sessions, flows,
+ * models. `navigate` is handed to the masthead's page tabs.
+ * @param {{ navigate: (path: string) => void }} props
+ * @returns {JSX.Element}
+ */
+const LedgerPage = ({ navigate }) => {
   const [rangeIndex, setRangeIndex] = useState(1);
   const [project, setProject] = useState("");
   const [provider, setProvider] = useState("");
@@ -233,19 +237,8 @@ export const App = () => {
           >
             <span className="sr-only">{refreshing ? "Updating" : "Up to date"}</span>
           </span>
-          <span className="theme-set" role="group" aria-label="Color theme">
-            {PREFERENCES.map((option) => (
-              <button
-                key={option}
-                type="button"
-                title={THEME_HINTS[option]}
-                aria-pressed={theme.preference === option}
-                onClick={() => theme.choose(option)}
-              >
-                {THEME_LABELS[option]}
-              </button>
-            ))}
-          </span>
+          <PageNav path="/" navigate={navigate} />
+          <ThemeControls theme={theme} />
           <button type="button" className="ghost" onClick={reloadAll}>
             Refresh
           </button>
@@ -463,4 +456,13 @@ export const App = () => {
       )}
     </main>
   );
+};
+
+/**
+ * The app: one route in, one page out.
+ * @returns {JSX.Element}
+ */
+export const App = () => {
+  const { path, navigate } = useRoute();
+  return path === "/lifetime" ? <LifetimePage navigate={navigate} /> : <LedgerPage navigate={navigate} />;
 };
