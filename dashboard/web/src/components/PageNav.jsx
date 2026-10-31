@@ -1,5 +1,10 @@
 /**
- * The tab strip that switches between the app's pages.
+ * The tab strip that switches between the app's pages: the phone layout's copy of the nav.
+ *
+ * On a desktop the page switcher is in the app rail (`AppRail.jsx`), which stays on screen while
+ * the ledger scrolls. Below the 40rem breakpoint the rail is off screen, so the masthead keeps
+ * this strip; a `compactNav` flag in `App.jsx` decides which one renders, and only one is ever
+ * on screen at a time.
  *
  * It is a group of buttons, not links: the pages swap in place, and a link would advertise a
  * navigation a keyboard or touch-typing user cannot take (there is no href to copy). The

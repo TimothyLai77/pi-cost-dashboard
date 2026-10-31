@@ -1,8 +1,9 @@
 /**
  * The light / dark / auto control, shared by both pages.
  *
- * It sits in the masthead of the ledger and of the lifetime page alike, so the control is
- * written once here rather than twice in two mastheads. The theme state itself lives in
+ * It lives in the app rail (`AppRail.jsx`), stacked vertically under the page links, and in the
+ * masthead on the phone layout where the rail is off screen. Collapsed, the rail swaps this
+ * three-button set for one cycling glyph (see `AppRail.jsx`). The theme state itself lives in
  * `theme.js`; this is only its three buttons.
  */
 

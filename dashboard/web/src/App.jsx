@@ -1,20 +1,27 @@
 /**
- * Dashboard root: the app's two pages, and the filter state the ledger's panels share.
+ * Dashboard root: the app shell, its two pages, and the filter state the ledger's panels share.
  *
  * The route comes from the browser's history (see router.js): `/` is the ledger, `/lifetime` is
  * the lifetime board. Both are the same Express origin, so switching pages is a `pushState` and
  * a re-render, and a deep link to `/lifetime` is answered by the server's own catch-all.
  *
+ * Both pages render inside `AppShell`: a rail on the left holding the page switcher and the
+ * theme control, and the page itself in the column beside it. The rail is sticky, so the control
+ * is on screen while the ledger scrolls; below the phone breakpoint it comes back on screen as a
+ * drawer opened from a menu button.
+ *
  * Range is expressed as a day count so the chart can ask for a window; "all" sends no
  * bounds and the server returns the full recorded history.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useApi } from "./api.js";
 import { useHourlyDrill } from "./hourly.js";
 import { useTheme } from "./theme.js";
 import { useRoute } from "./router.js";
+import { AppRail } from "./components/AppRail.jsx";
+import { IconMenu } from "./components/icons.jsx";
 import { CostChart } from "./components/CostChart.jsx";
 import { FlowsChart } from "./components/FlowsChart.jsx";
 import { HourChart } from "./components/HourChart.jsx";
@@ -34,6 +41,35 @@ const RANGES = [
 
 /** Seconds between automatic refreshes, so a running session's numbers move on their own. */
 const REFRESH_INTERVAL_MS = 30_000;
+
+/** At this viewport width (1440px) the rail expands by default. */
+const RAIL_EXPANDED_QUERY = "(min-width: 90rem)";
+
+/** Below this viewport width (640px) the page is the phone layout. */
+const PHONE_QUERY = "(max-width: 40rem)";
+
+/**
+ * A CSS media query as a piece of React state.
+ *
+ * `matchMedia` is the only way to know which layout the viewport is asking for, and a resize
+ * listener on every consumer is the same work with more bookkeeping. `useSyncExternalStore` is
+ * the harness's own pattern for an external value: React resubscribes on its own schedule, and
+ * the server snapshot (`false`) keeps the first render consistent.
+ * @param {string} query e.g. "(min-width: 90rem)"
+ * @returns {boolean} whether the viewport matches now
+ */
+const useMediaQuery = (query) => {
+  const subscribe = useCallback(
+    (onStoreChange) => {
+      const media = window.matchMedia(query);
+      media.addEventListener("change", onStoreChange);
+      return () => media.removeEventListener("change", onStoreChange);
+    },
+    [query],
+  );
+  const snapshot = useCallback(() => window.matchMedia(query).matches, [query]);
+  return useSyncExternalStore(subscribe, snapshot, () => false);
+};
 
 /**
  * @param {{ title: string, children: React.ReactNode, actions?: React.ReactNode }} props
@@ -66,11 +102,16 @@ const ErrorState = ({ message, hint }) => (
 
 /**
  * The ledger page: summary strip, daily chart with the hour drill-down, sessions, flows,
- * models. `navigate` is handed to the masthead's page tabs.
- * @param {{ navigate: (path: string) => void }} props
+ * models. `theme` and the phone-only masthead controls come from `AppShell`, which owns them so
+ * there is one theme state in the app rather than one per page.
+ * @param {{
+ *   navigate: (path: string) => void,
+ *   theme: { preference: string, choose: (preference: string) => void },
+ *   compactNav: boolean,
+ * }} props
  * @returns {JSX.Element}
  */
-const LedgerPage = ({ navigate }) => {
+const LedgerPage = ({ navigate, theme, compactNav }) => {
   const [rangeIndex, setRangeIndex] = useState(1);
   const [project, setProject] = useState("");
   const [provider, setProvider] = useState("");
@@ -78,8 +119,6 @@ const LedgerPage = ({ navigate }) => {
   const [refreshKey, setRefreshKey] = useState(0);
   // The day whose hours are showing, set by clicking a bar. Null means the daily view.
   const [drillDay, setDrillDay] = useState(null);
-  const theme = useTheme();
-
   const range = RANGES[rangeIndex];
 
   const summary = useApi("/api/summary", { days: range.days ?? 7, _k: refreshKey });
@@ -237,8 +276,8 @@ const LedgerPage = ({ navigate }) => {
           >
             <span className="sr-only">{refreshing ? "Updating" : "Up to date"}</span>
           </span>
-          <PageNav path="/" navigate={navigate} />
-          <ThemeControls theme={theme} />
+          {compactNav && <PageNav path="/" navigate={navigate} />}
+          {compactNav && <ThemeControls theme={theme} />}
           <button type="button" className="ghost" onClick={reloadAll}>
             Refresh
           </button>
@@ -459,10 +498,114 @@ const LedgerPage = ({ navigate }) => {
 };
 
 /**
- * The app: one route in, one page out.
+ * The app shell: the rail, the theme state, the phone layout flag, and the page the route selects.
+ *
+ * `theme` is owned here because the rail carries the control, and both pages take it as a prop.
+ * One owner means one localStorage write per change and no second copy of the setting going
+ * stale in a page that is not on screen.
+ *
+ * The rail's width follows the viewport (expanded from 90rem / 1440px), and a click pins the
+ * reader's choice until the window crosses that breakpoint again - dragging the window narrow
+ * collapses the rail without asking.
  * @returns {JSX.Element}
  */
-export const App = () => {
+const AppShell = () => {
   const { path, navigate } = useRoute();
-  return path === "/lifetime" ? <LifetimePage navigate={navigate} /> : <LedgerPage navigate={navigate} />;
+  const theme = useTheme();
+  const wideViewport = useMediaQuery(RAIL_EXPANDED_QUERY);
+  const isPhone = useMediaQuery(PHONE_QUERY);
+  // `null` means "follow the viewport"; a click on the rail's control pins the opposite.
+  const [pinnedCollapse, setPinnedCollapse] = useState(null);
+  const collapsed = pinnedCollapse ?? !wideViewport;
+  // The phone drawer: the rail is off screen below 40rem, and this says whether it is open.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Closing happens while the menu button is unmounted, so focus goes back to it in an effect
+  // once it is on screen again - focusing the ref inside the click handler lands on `<body>`.
+  const [restoreFocusToMenu, setRestoreFocusToMenu] = useState(false);
+  const menuButtonRef = useRef(null);
+
+  useEffect(() => setPinnedCollapse(null), [wideViewport]);
+
+  // Widening past the phone breakpoint closes the drawer: it is a phone control, and a window
+  // that grew should not be showing an overlay over the rail that is now on screen.
+  useEffect(() => {
+    if (!isPhone) setDrawerOpen(false);
+  }, [isPhone]);
+
+  // The drawer is modal: content behind it is `inert`, so the tab order is the rail's own
+  // controls and nothing else. Opening focuses the close control (the convention for a dialog),
+  // Escape closes and hands focus back to the button that opened it.
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    document.querySelector(".rail-close")?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") closeDrawer();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [drawerOpen]);
+
+  const closeDrawer = () => {
+    setDrawerOpen(false);
+    setRestoreFocusToMenu(true);
+  };
+
+  useEffect(() => {
+    if (!restoreFocusToMenu || drawerOpen) return;
+    menuButtonRef.current?.focus();
+    setRestoreFocusToMenu(false);
+  }, [restoreFocusToMenu, drawerOpen]);
+
+  const page =
+    path === "/lifetime" ? (
+      <LifetimePage navigate={navigate} theme={theme} compactNav={isPhone} />
+    ) : (
+      <LedgerPage navigate={navigate} theme={theme} compactNav={isPhone} />
+    );
+
+  return (
+    <div className="shell">
+      <AppRail
+        path={path}
+        navigate={navigate}
+        theme={theme}
+        collapsed={isPhone ? false : collapsed}
+        onToggleCollapse={() => setPinnedCollapse(!collapsed)}
+        isPhone={isPhone}
+        open={drawerOpen}
+        onCloseDrawer={isPhone ? closeDrawer : undefined}
+      />
+      {/* A button rather than a div: it is reachable by keyboard, and Escape closes the drawer
+          from anywhere on the page. */}
+      {isPhone && drawerOpen && (
+        <button
+          type="button"
+          className="rail-scrim"
+          tabIndex={-1}
+          aria-hidden="true"
+          onClick={closeDrawer}
+        />
+      )}
+      {isPhone && !drawerOpen && (
+        <button
+          ref={menuButtonRef}
+          type="button"
+          className="rail-menu"
+          aria-label="Open the menu"
+          aria-haspopup="dialog"
+          aria-expanded={false}
+          onClick={() => setDrawerOpen(true)}
+        >
+          <IconMenu />
+        </button>
+      )}
+      <div className="shell-body" inert={isPhone && drawerOpen}>{page}</div>
+    </div>
+  );
 };
+
+/**
+ * The app: one route in, one page out, inside the shell.
+ * @returns {JSX.Element}
+ */
+export const App = () => <AppShell />;
