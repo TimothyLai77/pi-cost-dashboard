@@ -31,10 +31,16 @@ const LEVEL_EXPONENT = 1.6;
  * What each band of levels is called. `minLevel` is the lowest level carrying that rank, and
  * the list is read in order, so the last rank that fits wins.
  *
- * The bands are five levels wide, so a rank change lands on a round level a person can see
- * coming (level 15 is Token Incinerator, and the bar says how far off it is). The names are the
- * roast, not the honor: every one of them is about volume burned rather than work done, which
- * is what a page of $105.80 and 1.33B tokens actually is.
+ * The bands are five levels wide, so a rank change lands on a round level the level banner can
+ * count down to: level 15 is Token Incinerator, and the bar says how far off it is the whole way
+ * there.
+ *
+ * The names escalate in the same order the ledger does. The low bands are about volume (tokens
+ * re-read, tokens burned) because that is what the first million XP is. The high bands are about
+ * money, because a level that takes 12.6M XP is not a volume story any more: at that point the
+ * joke is the invoice, the vendor's shareholder register, and the national scale of it. Read in
+ * order, the ladder goes "you use a lot" → "you enable an industry" → "nobody is supervising
+ * this spending" → "this is a fiscal event".
  *
  * @type {{ minLevel: number, rank: string }[]}
  */
@@ -43,13 +49,13 @@ export const RANKS = [
   { minLevel: 5, rank: "Context Hoarder" },
   { minLevel: 10, rank: "Cache Glutton" },
   { minLevel: 15, rank: "Token Incinerator" },
-  { minLevel: 20, rank: "Verbosity Engine" },
+  { minLevel: 20, rank: "Hallucination Enabler" },
   { minLevel: 25, rank: "Inference Arsonist" },
-  { minLevel: 30, rank: "Money Furnace" },
-  { minLevel: 35, rank: "Compute Pyromaniac" },
-  { minLevel: 40, rank: "Silicon Incinerator" },
-  { minLevel: 45, rank: "Total Token Catastrophe" },
-  { minLevel: 50, rank: "Ledger Legend" },
+  { minLevel: 30, rank: "Financially Unsupervised" },
+  { minLevel: 35, rank: "Circular Revenue Champion" },
+  { minLevel: 40, rank: "OpenAI Shareholder" },
+  { minLevel: 45, rank: "Bankruptcy Speedrunner" },
+  { minLevel: 50, rank: "The National Debt Simulator" },
 ];
 
 /** Weekday names, indexed by the 0-6 number a calendar day resolves to. @type {string[]} */

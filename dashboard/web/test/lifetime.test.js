@@ -162,6 +162,7 @@ test("the rank bands are five levels wide, so a rank change lands on a round lev
   assert.deepEqual(
     RANKS.map((entry) => entry.minLevel),
     [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50],
+    "eleven bands, level 50 upward is the top one",
   );
   assert.equal(
     RANKS.map((entry, index) => entry.minLevel - (RANKS[index - 1]?.minLevel ?? 0)).join(","),
@@ -169,16 +170,40 @@ test("the rank bands are five levels wide, so a rank change lands on a round lev
     "the first band is level 1, every band after it is five levels",
   );
 
-  // A band covers the levels before the next breakpoint, so the bar can name what is coming.
-  assert.equal(rankForLevel(1), "Prompt Tinkerer");
+  // The whole ladder, pinned as one list: renaming a band is a deliberate edit, and the page
+  // shows these words at full size in the level banner.
+  assert.deepEqual(
+    RANKS.map((entry) => `${entry.minLevel}:${entry.rank}`),
+    [
+      "1:Prompt Tinkerer",
+      "5:Context Hoarder",
+      "10:Cache Glutton",
+      "15:Token Incinerator",
+      "20:Hallucination Enabler",
+      "25:Inference Arsonist",
+      "30:Financially Unsupervised",
+      "35:Circular Revenue Champion",
+      "40:OpenAI Shareholder",
+      "45:Bankruptcy Speedrunner",
+      "50:The National Debt Simulator",
+    ],
+  );
+
+  // Each band starts with its own name and holds it to the level before the next breakpoint,
+  // so the bar can name the rank that is coming.
+  assert.equal(
+    RANKS.every((entry) => rankForLevel(entry.minLevel) === entry.rank),
+    true,
+    "a band begins at its own level",
+  );
+  assert.equal(
+    RANKS.slice(0, -1).every((entry, index) => rankForLevel(RANKS[index + 1].minLevel - 1) === entry.rank),
+    true,
+    "and covers every level up to the next band",
+  );
   assert.equal(rankForLevel(4), "Prompt Tinkerer");
-  assert.equal(rankForLevel(5), "Context Hoarder");
-  assert.equal(rankForLevel(9), "Context Hoarder");
-  assert.equal(rankForLevel(10), "Cache Glutton");
-  assert.equal(rankForLevel(15), "Token Incinerator");
-  assert.equal(rankForLevel(49), "Total Token Catastrophe");
-  assert.equal(rankForLevel(50), "Ledger Legend");
-  assert.equal(rankForLevel(999), "Ledger Legend", "the top rank keeps going");
+  assert.equal(rankForLevel(49), "Bankruptcy Speedrunner");
+  assert.equal(rankForLevel(999), RANKS.at(-1).rank, "the top rank keeps going");
 
   assert.equal(
     RANKS.every((entry) => entry.rank.length > 0),
