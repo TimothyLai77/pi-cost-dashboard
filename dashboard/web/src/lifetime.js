@@ -345,6 +345,104 @@ export const HEATMAP_WEEKS = 26;
 export const HEATMAP_WEEKS_NARROW = 13;
 
 /**
+ * Commentary lines the level card cycles through.
+ *
+ * Plain strings, no placeholders: a joke that quotes the ledger has to be written by someone
+ * who has seen the ledger, and a string that cannot resolve is a string the page has to hide.
+ * Two lines is the budget (~110 characters), which is what the card's fixed-height box clamps.
+ *
+ * Filled in by hand, so the list is the feature: an empty list renders no strip at all.
+ *
+ * @type {string[]}
+ */
+export const QUIPS = [
+  "A penny saved is a GPU hour wasted.",
+  "Why solve it in 100 tokens when you can solve it in 100,000?",
+  "Your agent is thinking very hard about being wrong.",
+  "Congratulations on automating a task that took 11 seconds.",
+  "You gotta keep the AI bubble inflated somehow...",
+  "Context window looking a little empty. Are you even trying to warm the planet?",
+  "Spending $0.40 in API fees to save $0.02 of human effort.",
+  "A 40-step agent loop just to return null.",
+  "Burning carbon so you don't have to write a Regex.",
+  "Cooking the planet to avoid reading the documentation.",
+  "Spend money to save money. Eventually.",
+  "A dollar of inference to save a penny of labour.",
+  "Another day, another subsidized hallucination.",
+  "The business model is somewhere in the context window.",
+  "Have you considered using more electricity to think less?",
+  "Every token is a small contribution to climate change.",
+  "The planet isn't going to warm itself.",
+  "Generating 4,000 tokens to avoid a Google search. Sustainable.",
+  "Mother Nature would like you to switch to Haiku.",
+  "Four agents, two dozen tool calls, zero useful outcomes.",
+  "Who is JSON?",
+  "Somewhere, a GPU is collateralizing another GPU.",
+  "Nobody has read this output. Nobody.",
+  "The agent has read your file eleven times. It is not learning.",
+  "Six tool calls to find out what your shell history already knew.",
+  "The plan was good. The plan was also 9,000 tokens.",
+  "Every compaction is a small amnesia you paid for.",
+  "This session cost more than the feature is worth. Ship it.",
+];
+
+/**
+ * Milliseconds a commentary line stays up before the strip walks to the next one.
+ *
+ * Exported from the pure module rather than kept in the page because the typing budget is
+ * measured against it: a line that takes longer to type than the window it is shown in is a bug
+ * the tests can see, and they cannot see into a component.
+ *
+ * @type {number}
+ */
+export const QUIP_ROTATION_MS = 9_000;
+
+/**
+ * Milliseconds per character of the commentary strip's typing animation.
+ *
+ * The budget is the rotation: the longest line in the list has to finish typing with time left to
+ * read it, and `lifetime.test.js` enforces that (110 characters at this speed is 2.9s of a 9s
+ * window, so more than two thirds of the time is spent on a finished, readable line).
+ *
+ * @type {number}
+ */
+export const QUIP_TYPE_MS = 26;
+
+/**
+ * Which commentary line to show.
+ *
+ * The rotation walks the list in order from a start point picked by the day, so a day opens on
+ * the same line, a visit walks the whole list before it repeats, and the line never repeats
+ * immediately. A shuffle would repeat by accident; walking a list cannot.
+ *
+ * @param {string[]} list The commentary lines
+ * @param {number} seed The day's start offset, from `quipSeedFor`
+ * @param {number} rotation How many steps this visit has already taken
+ * @returns {number | null} The index to show, null when there is nothing to show
+ */
+export const pickQuip = (list, seed, rotation) => {
+  const count = list?.length ?? 0;
+  if (count === 0) return null;
+  const start = Math.abs(Math.trunc(seed)) % count;
+  return (start + Math.abs(Math.trunc(rotation))) % count;
+};
+
+/**
+ * The day's starting offset into the commentary list.
+ *
+ * A cheap sum of the date's characters: it is not a hash that needs to be strong, it needs to
+ * be stable for a day and different day to day, and a sum of character codes over ten characters
+ * does that without a dependency.
+ *
+ * @param {string} day A `YYYY-MM-DD` day string
+ * @returns {number} A non-negative integer to seed `pickQuip`
+ */
+export const quipSeedFor = (day) => {
+  if (typeof day !== "string") return 0;
+  return [...day].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+};
+
+/**
  * The activity grid: weeks as columns, Sunday to Saturday as rows.
  *
  * The window is `weeks` whole columns ending with the column that contains `endDay`, each
