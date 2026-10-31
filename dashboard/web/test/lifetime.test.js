@@ -24,6 +24,7 @@ import {
   peakOf,
   pickQuip,
   QUIPS,
+  QUIP_MAX_CHARS,
   QUIP_ROTATION_MS,
   QUIP_TYPE_MS,
   quipSeedFor,
@@ -295,12 +296,12 @@ test("the commentary strip picks a line that walks the list without repeats", ()
   assert.equal(quipSeedFor(undefined) >= 0, true, "a missing day seeds 0, not NaN");
 
   const lines = QUIPS.filter(
-    (line) => typeof line !== "string" || line.length === 0 || line.length > 110,
+    (line) => typeof line !== "string" || line.length === 0 || line.length > QUIP_MAX_CHARS,
   );
   assert.deepEqual(
     lines,
     [],
-    "every line is text that fits the strip's two-line box (~110 characters)",
+    `every line is text that fits the strip's two-line box (${QUIP_MAX_CHARS} characters, measured in monospace at 360px)`,
   );
 
   // Typing is the strip's entrance, so it has to finish inside the rotation window and leave

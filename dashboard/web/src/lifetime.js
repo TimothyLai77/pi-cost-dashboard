@@ -361,7 +361,7 @@ export const QUIPS = [
   "Your agent is thinking very hard about being wrong.",
   "Congratulations on automating a task that took 11 seconds.",
   "You gotta keep the AI bubble inflated somehow...",
-  "Context window looking a little empty. Are you even trying to warm the planet?",
+  "Context window looking a little empty. Trying to warm the planet?",
   "Spending $0.40 in API fees to save $0.02 of human effort.",
   "A 40-step agent loop just to return null.",
   "Burning carbon so you don't have to write a Regex.",
@@ -385,6 +385,17 @@ export const QUIPS = [
   "Every compaction is a small amnesia you paid for.",
   "This session cost more than the feature is worth. Ship it.",
 ];
+
+/**
+ * Longest commentary line the strip can show without clamping.
+ *
+ * Measured, not guessed: in the strip's monospace at 360px - the narrowest phone width the layout
+ * targets - real lines of up to 64 characters fit the two-line box, and clamping starts at 72.
+ * 390px and up fit everything in this file.
+ *
+ * @type {number}
+ */
+export const QUIP_MAX_CHARS = 70;
 
 /**
  * Milliseconds a commentary line stays up before the strip walks to the next one.

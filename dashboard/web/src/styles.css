@@ -913,7 +913,12 @@ button.ghost {
   opacity: 0.85;
 }
 
-/* Commentary strip. Two rules here are load-bearing:
+/* Commentary strip. Monospace in the ledger's own numeral face, and the page's `--live` hue -
+   the colour the scan pill, the focus ring and the live bar overlay already use for "the machine
+   is running". The commentary is the moving thing on the page, so it wears the moving thing's
+   colour; the caret inherits it. Contrast 5.3:1 on paper and 6.3:1 on the dark raised card.
+   Hover and focus take it to full ink, because stopping the strip means you are reading it.
+   Two more rules are load-bearing:
    - The box is always two lines tall. A rotating line that is short sometimes and long other
      times makes everything below the card jump every nine seconds, so the height is a fixed
      padding plus two lines - one line and two lines take exactly the same room (measured: card
@@ -931,9 +936,15 @@ button.ghost {
   border-top: 1px dotted var(--rule-strong);
   height: calc(var(--space-3) + 2 * 1.35em);
   max-width: 46rem;
-  color: var(--ink-soft);
+  color: var(--live);
+  font-family: var(--font-numeral);
   font-size: 0.8125rem;
   line-height: 1.35;
+}
+
+.quip:hover,
+.quip:focus-visible {
+  color: var(--ink);
 }
 
 /* The caret is the strip's own blink, and it keeps blinking after the line finishes: it is the

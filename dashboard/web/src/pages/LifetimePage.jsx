@@ -153,7 +153,7 @@ const Panel = ({ title, actions, children }) => (
  *   interval, which is the keyboard-visible way to stop reading it mid-joke.
  * - `prefers-reduced-motion` means no timer at all, so the line is chosen and stays put.
  * - The box is two lines tall whatever the line says, so the panels under the card do not jump
- *   every nine seconds, and a line over the budget clamps with an ellipsis.
+ *   every nine seconds, and a line over the budget (`QUIP_MAX_CHARS`) clamps with an ellipsis.
  * - The line types itself out, one character at a time, and the caret keeps blinking after it.
  *   Hovering finishes the line in one go: stopping the animation should mean "let me read this",
  *   not "freeze it mid-word", and moving the pointer away resumes from where it stopped rather
