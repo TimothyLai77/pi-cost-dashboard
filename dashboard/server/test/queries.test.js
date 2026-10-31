@@ -25,6 +25,7 @@ import {
   getHourlyCost,
   getFilters,
   getHealth,
+  getLifetimeStats,
   getModelCost,
   getSessionById,
   getSessions,
@@ -284,6 +285,128 @@ test("getHealth reports counts, schema version, and last scan", () => {
   db.close();
 });
 
+test("getLifetimeStats totals the whole ledger and names the record days", () => {
+  const db = seededDb();
+  const stats = getLifetimeStats(db);
+
+  assert.equal(stats.range.from, "2026-01-01");
+  assert.equal(stats.range.to, "2026-01-03");
+
+  assert.equal(stats.totals.costMicros, 119250);
+  assert.equal(stats.totals.totalTokens, 151435);
+  assert.equal(stats.totals.sessions, 2, "both fixture sessions recorded usage");
+  assert.equal(stats.totals.events, 10, "every usage-bearing entry");
+  assert.equal(stats.totals.activeDays, 3);
+  assert.equal(stats.totals.calendarDays, 3);
+  assert.equal(
+    Object.values(stats.totals.costBreakdown).reduce((sum, part) => sum + part.costMicros, 0),
+    stats.totals.costMicros,
+    "the four money parts add up to the reported total",
+  );
+
+  assert.equal(stats.counts.sessions, 2);
+  assert.equal(stats.counts.projects, 2);
+  assert.equal(stats.counts.models, 2, "claude-sonnet-4-5 and the zero-priced custom model");
+  assert.equal(stats.counts.toolCalls, 1);
+
+  // The day series is the heatmap's raw material: one point per day with usage, ascending.
+  assert.deepEqual(
+    stats.daily.map((point) => [point.day, point.costMicros, point.totalTokens, point.sessions]),
+    [
+      ["2026-01-01", 19150, 51359, 1],
+      ["2026-01-02", 100, 66, 1],
+      ["2026-01-03", 100000, 100010, 1],
+    ],
+  );
+
+  assert.equal(stats.records.mostExpensiveDay.day, "2026-01-03");
+  assert.equal(stats.records.busiestTokenDay.day, "2026-01-03");
+  assert.equal(stats.records.mostSessionsDay.day, "2026-01-03", "a tie goes to the later day");
+  assert.equal(stats.records.biggestSession.sessionId.startsWith("22222222"), true, "usage-only bills most");
+  assert.equal(stats.records.longestSession.spanSeconds, 90005, "full-usage spans 2026-01-01 10:00 to 01-02 11:00:05");
+  assert.equal(stats.records.biggestCall.costMicros, 100000, "the single cache-warm call in usage-only");
+  assert.equal(stats.records.biggestCall.kind, "usage");
+  assert.equal(stats.records.biggestCall.occurredAt, "2026-01-03T09:00:01.000Z");
+  assert.equal(stats.records.topProjectByCost.cwd, "/home/user/project-b");
+  assert.equal(stats.records.topModelByCost.modelId, "claude-sonnet-4-5");
+  assert.equal(stats.records.topModelByTokens.modelId, "claude-sonnet-4-5");
+  db.close();
+});
+
+test("getLifetimeStats shapes the hour-of-day and weekday series for the page", () => {
+  const db = seededDb();
+  const stats = getLifetimeStats(db);
+
+  // Full 24-hour and 7-weekday series: a hour that never ran is a visible zero, not a hole.
+  assert.equal(stats.hoursOfDay.length, 24);
+  assert.equal(
+    stats.hoursOfDay.reduce((sum, hour) => sum + hour.totalTokens, 0),
+    stats.totals.totalTokens,
+    "every fact lands in exactly one hour bucket",
+  );
+  assert.equal(stats.hoursOfDay[9].totalTokens, 100010, "usage-only bills at 09:00Z");
+  assert.equal(stats.hoursOfDay[10].costMicros, 19150, "full-usage bills at 10:00Z");
+
+  assert.deepEqual(
+    stats.weekdays.map((day) => day.name),
+    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
+    "the week starts on Sunday, so the page can draw it in list order",
+  );
+  assert.equal(stats.weekdays.reduce((sum, day) => sum + day.days, 0), stats.totals.activeDays);
+  assert.equal(stats.weekdays[4].name, "Thursday", "2026-01-01 is a Thursday");
+  assert.equal(stats.weekdays[4].costMicros, 19150);
+  assert.equal(stats.weekdays[6].costMicros, 100000, "2026-01-03 is a Saturday");
+  db.close();
+});
+
+test("getLifetimeStats counts a zero-cost day as an active day", () => {
+  const db = seededDbWithForkedChild();
+  const stats = getLifetimeStats(db);
+
+  // forked-zero-cost bills nothing on 2026-01-04 and burns 10,000 tokens doing it.
+  assert.equal(stats.totals.activeDays, 4, "a day of free local-model work is not a gap");
+  assert.equal(stats.totals.calendarDays, 4);
+  assert.equal(stats.daily.at(-1).day, "2026-01-04");
+  assert.equal(stats.daily.at(-1).costMicros, 0);
+  assert.equal(stats.daily.at(-1).totalTokens, 10000);
+  assert.equal(stats.totals.costMicros, 119250, "the free day added no money");
+  assert.equal(stats.counts.projects, 3, "the nested session lives in project-c");
+  db.close();
+});
+
+test("getLifetimeStats drops nested subagent spend when asked", () => {
+  const withNested = getLifetimeStats(seededDbWithSubagent());
+  const directOnly = getLifetimeStats(seededDbWithSubagent(), { includeSubagents: false });
+
+  // subagent.jsonl bills 7,000 micros on 2026-01-01 inside its parent's project.
+  assert.equal(withNested.totals.costMicros, 126250);
+  assert.equal(directOnly.totals.costMicros, 119250);
+  assert.equal(withNested.totals.sessions, 3, "the nested session is a session");
+  assert.equal(directOnly.totals.sessions, 2);
+  assert.equal(directOnly.counts.projects, 2, "the filter is the ledger's, not a new project view");
+  assert.equal(
+    directOnly.hoursOfDay.reduce((sum, hour) => sum + hour.events, 0),
+    directOnly.totals.events,
+    "the hour series follows the filter, as the day series does",
+  );
+});
+
+test("getLifetimeStats groups days on the zone it is given", () => {
+  const utc = getLifetimeStats(seededDb());
+  const east = getLifetimeStats(seededDb(), { timeZone: "Pacific/Kiritimati" });
+
+  // UTC+14 reads 2026-01-01T10:00Z as Jan 2, and pushes 2026-01-02T11:00Z into Jan 3, so the
+  // record days move with the zone while the totals stay put.
+  assert.equal(utc.range.offsetLabel, "UTC");
+  assert.equal(east.range.offsetLabel, "UTC+14");
+  assert.equal(east.daily.length, 2, "two local days: Jan 1 disappears, Jan 4 never existed");
+  assert.equal(east.daily[0].day, "2026-01-02");
+  assert.equal(east.daily[0].costMicros, 19150, "the Jan 1 spend, read on the far-east wall clock");
+  assert.equal(east.daily[1].costMicros, 100100, "Jan 2's 100 micros arrive on Jan 3 in UTC+14");
+  assert.equal(east.totals.costMicros, utc.totals.costMicros, "a zone moves days, it never changes the total");
+  assert.equal(east.totals.calendarDays, 2);
+});
+
 /**
  * Start the app on an ephemeral port and run a block of requests against it.
  * @param {import("better-sqlite3").Database} db
@@ -310,6 +433,27 @@ test("GET /api/health responds with the database state", async () => {
     const body = await response.json();
     assert.equal(body.sessionCount, 2);
     assert.equal(body.sessionsDir, "/tmp/sessions");
+  });
+  db.close();
+});
+
+test("GET /api/lifetime reports the whole ledger with no range to choose", async () => {
+  const db = seededDb();
+  await withServer(db, async (base) => {
+    const response = await fetch(`${base}/api/lifetime`);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.totals.costMicros, 119250);
+    assert.equal(body.totals.costUsd, "$0.12");
+    assert.equal(body.daily.length, 3);
+    assert.equal(body.records.mostExpensiveDay.costUsd, "$0.10");
+
+    const withoutNested = await fetch(`${base}/api/lifetime?subagents=0`);
+    assert.equal((await withoutNested.json()).totals.costMicros, 119250);
+
+    const badFlag = await fetch(`${base}/api/lifetime?subagents=maybe`);
+    assert.equal(badFlag.status, 400);
+    assert.equal((await badFlag.json()).parameter, "subagents");
   });
   db.close();
 });
