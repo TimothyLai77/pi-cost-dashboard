@@ -22,6 +22,9 @@ import {
   intensityFor,
   levelFromXp,
   peakOf,
+  pickQuip,
+  QUIPS,
+  quipSeedFor,
   rankForLevel,
   RANKS,
   shiftDay,
@@ -260,6 +263,41 @@ test("buildHeatmap draws whole week columns from Sunday to Saturday", () => {
   const empty = buildHeatmap([], { endDay: null });
   assert.equal(empty.columns.length, 0);
   assert.equal(empty.endDay, null);
+});
+
+test("the commentary strip picks a line that walks the list without repeats", () => {
+  const list = ["one", "two", "three", "four", "five"];
+
+  assert.equal(pickQuip([], 3, 0), null, "no lines, nothing to show");
+  assert.equal(pickQuip(["only"], 999, 12), 0, "one line is always that line");
+
+  assert.equal(pickQuip(list, 2, 5), pickQuip(list, 2, 5), "same day and step, same line");
+
+  const start = pickQuip(list, 4, 0);
+  const shown = Array.from({ length: list.length }, (_, step) => pickQuip(list, 4, step));
+  assert.equal(
+    [...shown].sort((a, b) => a - b).join(","),
+    "0,1,2,3,4",
+    "a visit covers the whole list before it repeats",
+  );
+  assert.equal(
+    shown.every((index, step) => index !== shown[step - 1]),
+    true,
+    "no line is shown twice back to back",
+  );
+  assert.equal(pickQuip(list, 4, list.length), start, "and then the cycle starts over");
+
+  // The start point comes from the day, so a day opens on the same line and days differ.
+  assert.equal(quipSeedFor("2026-10-31"), quipSeedFor("2026-10-31"), "stable within a day");
+  assert.notEqual(quipSeedFor("2026-10-31"), quipSeedFor("2026-11-01"), "a new day is a new start");
+  assert.equal(quipSeedFor(undefined) >= 0, true, "a missing day seeds 0, not NaN");
+
+  const overlong = QUIPS.filter((line) => typeof line !== "string" || line.length === 0 || line.length > 110);
+  assert.deepEqual(
+    overlong,
+    [],
+    "every line is text that fits the strip's two-line box (~110 characters)",
+  );
 });
 
 test("the activity grid's two windows fit the cards they are drawn in", () => {

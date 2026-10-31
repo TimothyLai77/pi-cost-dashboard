@@ -345,6 +345,53 @@ export const HEATMAP_WEEKS = 26;
 export const HEATMAP_WEEKS_NARROW = 13;
 
 /**
+ * Commentary lines the level card cycles through.
+ *
+ * Plain strings, no placeholders: a joke that quotes the ledger has to be written by someone
+ * who has seen the ledger, and a string that cannot resolve is a string the page has to hide.
+ * Two lines is the budget (~110 characters), which is what the card's fixed-height box clamps.
+ *
+ * Filled in by hand, so the list is the feature: an empty list renders no strip at all.
+ *
+ * @type {string[]}
+ */
+export const QUIPS = [];
+
+/**
+ * Which commentary line to show.
+ *
+ * The rotation walks the list in order from a start point picked by the day, so a day opens on
+ * the same line, a visit walks the whole list before it repeats, and the line never repeats
+ * immediately. A shuffle would repeat by accident; walking a list cannot.
+ *
+ * @param {string[]} list The commentary lines
+ * @param {number} seed The day's start offset, from `quipSeedFor`
+ * @param {number} rotation How many steps this visit has already taken
+ * @returns {number | null} The index to show, null when there is nothing to show
+ */
+export const pickQuip = (list, seed, rotation) => {
+  const count = list?.length ?? 0;
+  if (count === 0) return null;
+  const start = Math.abs(Math.trunc(seed)) % count;
+  return (start + Math.abs(Math.trunc(rotation))) % count;
+};
+
+/**
+ * The day's starting offset into the commentary list.
+ *
+ * A cheap sum of the date's characters: it is not a hash that needs to be strong, it needs to
+ * be stable for a day and different day to day, and a sum of character codes over ten characters
+ * does that without a dependency.
+ *
+ * @param {string} day A `YYYY-MM-DD` day string
+ * @returns {number} A non-negative integer to seed `pickQuip`
+ */
+export const quipSeedFor = (day) => {
+  if (typeof day !== "string") return 0;
+  return [...day].reduce((sum, character) => sum + character.charCodeAt(0), 0);
+};
+
+/**
  * The activity grid: weeks as columns, Sunday to Saturday as rows.
  *
  * The window is `weeks` whole columns ending with the column that contains `endDay`, each

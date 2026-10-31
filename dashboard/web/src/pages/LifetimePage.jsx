@@ -23,6 +23,9 @@ import {
   HEATMAP_WEEKS_NARROW,
   hourLabel,
   peakOf,
+  pickQuip,
+  QUIPS,
+  quipSeedFor,
   weekTotals,
   xpFromTotals,
   levelFromXp,
@@ -40,6 +43,36 @@ import { ThemeControls } from "../components/ThemeControls.jsx";
 const REFRESH_INTERVAL_MS = 60_000;
 
 /**
+ * A CSS media query, as a live value.
+ *
+ * Two drawings on this page depend on a stylesheet breakpoint, and CSS cannot hand a value to
+ * JavaScript: the activity grid has to pick a window before it draws, and the commentary strip has
+ * to know whether it is allowed to move at all. Subscribing to the same query the stylesheet uses
+ * keeps them flipping at the same moment the layout does.
+ *
+ * @param {string} query A CSS media query, e.g. `(max-width: 40rem)`
+ * @returns {boolean} true while the query matches
+ */
+const useMediaQuery = (query) => {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const onChange = (event) => setMatches(event.matches);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [query]);
+
+  return matches;
+};
+
+/** The stylesheet's narrow-layout breakpoint, shared by the CSS and the grid's week count. */
+const NARROW_LAYOUT_QUERY = "(max-width: 40rem)";
+
+/** The OS setting that says no unnecessary animation, honoured by the commentary strip. */
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+/**
  * The phone-width layout, as a live value.
  *
  * The activity grid has to pick a window before it draws, and the window depends on the width
@@ -48,21 +81,7 @@ const REFRESH_INTERVAL_MS = 60_000;
  *
  * @returns {boolean} true while the viewport is at the phone-width layout
  */
-const useNarrowViewport = () => {
-  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_LAYOUT_QUERY).matches);
-
-  useEffect(() => {
-    const query = window.matchMedia(NARROW_LAYOUT_QUERY);
-    const onChange = (event) => setNarrow(event.matches);
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-
-  return narrow;
-};
-
-/** The stylesheet's narrow-layout breakpoint, shared by the CSS and the grid's week count. */
-const NARROW_LAYOUT_QUERY = "(max-width: 40rem)";
+const useNarrowViewport = () => useMediaQuery(NARROW_LAYOUT_QUERY);
 
 /**
  * Today's calendar day in the browser's own zone, as `YYYY-MM-DD`.
@@ -120,16 +139,73 @@ const Panel = ({ title, actions, children }) => (
   </section>
 );
 
+/** Seconds a commentary line stays up before the strip walks to the next one. */
+const QUIP_INTERVAL_MS = 9_000;
+
+/**
+ * The commentary strip under the level bar: one line at a time from `QUIPS`.
+ *
+ * Four things this has to get right, because a rotating line of text is the kind of decoration
+ * that ruins a page:
+ *
+ * - It walks the list from a start point picked by the day, so a day opens on the same line, and
+ *   it never repeats a line back to back (`pickQuip`).
+ * - The timer is JavaScript, so CSS cannot stop it: hovering or focusing the line clears the
+ *   interval, which is the keyboard-visible way to stop reading it mid-joke.
+ * - `prefers-reduced-motion` means no timer at all, so the line is chosen and stays put.
+ * - The box is two lines tall whatever the line says, so the panels under the card do not jump
+ *   every nine seconds, and a line over the budget clamps with an ellipsis.
+ *
+ * `aria-live="off"` because the text is commentary: a live region that changes every nine seconds
+ * is a screen reader reading the page out loud forever.
+ *
+ * @param {{ seed: number }} props `seed` is the day's offset into the list, from `quipSeedFor`
+ * @returns {JSX.Element | null} the strip, or nothing when there are no lines to show
+ */
+const QuipStrip = ({ seed }) => {
+  const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
+  const [rotation, setRotation] = useState(0);
+  const [paused, setPaused] = useState(false);
+
+  useEffect(() => {
+    if (reducedMotion || paused || QUIPS.length < 2) return undefined;
+    const timer = setInterval(() => setRotation((step) => step + 1), QUIP_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [reducedMotion, paused]);
+
+  const index = pickQuip(QUIPS, seed, rotation);
+  if (index === null) return null;
+
+  return (
+    <span
+      key={index}
+      className="quip"
+      role="note"
+      aria-live="off"
+      tabIndex={0}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+    >
+      {QUIPS[index]}
+    </span>
+  );
+};
+
 /**
  * Level banner: the level, its rank, and the bar toward the next one.
  *
  * The gap is also translated into tokens, because XP is mostly tokens: "3,361 XP to go" is
  * abstract, "≈3.4M tokens" is one short session on a local model.
  *
- * @param {{ level: { level: number, rank: string, percent: number, xpToNext: number, xp: number } }} props
+ * @param {{
+ *   level: { level: number, rank: string, percent: number, xpToNext: number, xp: number },
+ *   quipSeed: number,
+ * }} props
  * @returns {JSX.Element}
  */
-const LevelBanner = ({ level }) => {
+const LevelBanner = ({ level, quipSeed }) => {
   const tokensToNext = Math.round(level.xpToNext / XP_PER_TOKEN);
   const ariaLabel = `Level ${level.level}, ${level.rank}, ${level.percent}% of the way to level ${
     level.level + 1
@@ -156,6 +232,7 @@ const LevelBanner = ({ level }) => {
       <span className="level-legend eyebrow">
         1 XP per 1k tokens · 1 XP per $0.10 · {groupNumber(level.xp)} XP banked
       </span>
+      <QuipStrip seed={quipSeed} />
     </div>
   );
 };
@@ -528,7 +605,7 @@ export const LifetimePage = ({ navigate }) => {
                 } model calls`}
                 title={tokenKinds(totals)}
               />
-              <LevelBanner level={level} />
+              <LevelBanner level={level} quipSeed={quipSeedFor(today)} />
             </div>
           </section>
 

@@ -913,6 +913,41 @@ button.ghost {
   opacity: 0.85;
 }
 
+/* Commentary strip. Two rules here are load-bearing:
+   - The box is always two lines tall. A rotating line that is short sometimes and long other
+     times makes everything below the card jump every nine seconds, so the height is a fixed
+     padding plus two lines - one line and two lines take exactly the same room (measured: card
+     height 176px with a one-line quip and 176px with a two-line quip at 1280) - and anything
+     over the budget clamps with an ellipsis.
+   - The fade is an entering animation keyed to the line, not a timer. React remounts the span
+     when the index changes, so the animation replays by itself, and the reduced-motion block
+     below turns it off along with the strip's own timer. */
+.quip {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dotted var(--rule-strong);
+  min-height: calc(2 * 1.35em);
+  height: calc(var(--space-3) + 2 * 1.35em);
+  max-width: 46rem;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  animation: quip-in 400ms ease;
+}
+
+@keyframes quip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* --- lifetime page: activity grid --- */
 
 /* Week columns, Sunday at the top. The columns are `1fr` tracks, so the strip spans its card
