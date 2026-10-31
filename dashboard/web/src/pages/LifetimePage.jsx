@@ -36,6 +36,7 @@ import {
 import { useApi } from "../api.js";
 import { useTheme } from "../theme.js";
 import { PageNav } from "../components/PageNav.jsx";
+import { moneyBreakdown } from "../components/costParts.js";
 import { ThemeControls } from "../components/ThemeControls.jsx";
 
 /**
@@ -113,15 +114,21 @@ const formatSpan = (seconds) => {
 };
 
 /**
- * A headline figure with a label and one line of context under it.
- * @param {{ label: string, value: string, note?: string, tone?: "money" | "volume", title?: string }} props
+ * A headline figure with a label and context under it.
+ *
+ * `note` is the one line of context every cell has. `foot` is a second line, used by the hero
+ * cell, whose card stretches to the height of the level card next to it and needs the extra line
+ * to read as a filled box rather than a label floating above an empty one.
+ *
+ * @param {{ label: string, value: string, note?: string, foot?: string, tone?: "money" | "volume", title?: string }} props
  * @returns {JSX.Element}
  */
-const StatCell = ({ label, value, note, tone = "volume", title }) => (
+const StatCell = ({ label, value, note, foot, tone = "volume", title }) => (
   <div className="stat-cell" data-tone={tone} title={title}>
     <span className="eyebrow">{label}</span>
     <span className="value">{value}</span>
     {note && <span className="sub numeral">{note}</span>}
+    {foot && <span className="stat-cell__foot numeral">{foot}</span>}
   </div>
 );
 
@@ -627,6 +634,7 @@ export const LifetimePage = ({ navigate }) => {
                 note={`${formatTokens(totals.totalTokens)} tokens · ${groupNumber(totals.sessions)} sessions · ${
                   groupNumber(totals.events)
                 } model calls`}
+                foot={moneyBreakdown(totals)}
                 title={tokenKinds(totals)}
               />
               <LevelBanner level={level} quipSeed={quipSeedFor(today)} />

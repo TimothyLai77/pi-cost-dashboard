@@ -836,6 +836,14 @@ button.ghost {
   font-size: 0.75rem;
 }
 
+/* The hero cell's second context line: the bill split, the same four parts the day and hour lines
+   list. It sits under the token count at the bottom of the card, which is where the stretched cell
+   had nothing. One size below `.sub`, so the card reads label - number - context - fine print. */
+.stat-cell__foot {
+  color: var(--ink-faint);
+  font-size: 0.6875rem;
+}
+
 .hero-totals,
 .record-grid,
 .streak-grid {
@@ -847,6 +855,18 @@ button.ghost {
 
 .hero-totals {
   grid-template-columns: minmax(15rem, 1fr) minmax(20rem, 1.5fr);
+}
+
+/* The hero pair is a grid, so the spend cell stretches to the height of the level card next to it -
+   and the level card is the tall one, because the commentary box is a fixed two lines. Packing the
+   spend cell at the top left 121px of bare box under 68px of text at 1280, which reads as a hole in
+   the left half of the page. The cell now carries its bill split as a fourth line and spaces the
+   four to the edges, so it fills whatever height the row happens to have: label at the top, the
+   number in the middle, the token count and the split down at the bottom rule. The stat cells
+   elsewhere on the page keep packing from the top, because there the cards are as tall as their own
+   content. */
+.hero-totals .stat-cell {
+  align-content: space-between;
 }
 
 .record-grid {
