@@ -951,18 +951,22 @@ button.ghost {
   overflow-x: auto;
 }
 
-/* One label per column, positioned at its column's own share of the grid. The text is wider than
-   a column and is allowed to spill, which is how a month tick reads on a grid. */
+/* One label per column, laid out on the strip's own tracks. A grid of the same columns the
+   squares use keeps a tick over its column at every width, including when the strip is wider
+   than its box and scrolls - positioning the ticks as a share of the box lines up only while the
+   strip fits, and drifts by up to 30px when it does not. The text is wider than a column and is
+   allowed to spill, which is how a month tick reads on a grid. */
 .heatmap-months {
-  position: relative;
-  height: var(--heat-month-row);
+  display: grid;
+  grid-template-columns: repeat(var(--weeks), minmax(var(--heat-col-min), 1fr));
+  gap: var(--heat-gap);
   font-size: 0.625rem;
   letter-spacing: 0.06em;
 }
 
 .heatmap-months span {
-  position: absolute;
-  left: calc(var(--week) * 100% / var(--weeks));
+  grid-column: calc(var(--week) + 1);
+  justify-self: start;
   white-space: nowrap;
   color: var(--ink-faint);
 }
@@ -1101,11 +1105,76 @@ button.ghost {
     display: none;
   }
 
+  /* A table cannot be narrower than the widest thing in it, so on a phone a long session name
+     set the minimum width of the whole page - measured 424px of panel inside a 390px screen,
+     with the Cost column off the edge. Fixed layout makes the columns obey the panel's width and
+     the names get an ellipsis. Widths are for the three columns the narrow layout keeps. */
+  .sessions {
+    table-layout: fixed;
+  }
+
+  .sessions th:first-child,
+  .sessions td:first-child {
+    width: 46%;
+  }
+
+  .sessions th:nth-child(4),
+  .sessions td:nth-child(4) {
+    width: 30%;
+  }
+
+  .sessions th:nth-child(5),
+  .sessions td:nth-child(5) {
+    width: 24%;
+  }
+
+  .sessions .session-name,
+  .sessions .session-project {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A `<select>` sizes itself to its longest option, and the project filter's options are
+     directory paths: the filter row measured 408px inside a 364px panel head, which is the width
+     the whole phone page then had to be (measured 437px of pan-able page on a 390px screen). Let
+     it shrink with the panel and clip, since the tooltip and the option list still show the whole
+     path. */
+  .controls label {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* A flex item's default `min-width: auto` is its content's minimum, which is why clipping the
+     select alone was not enough: the row refused to get narrower than the select. */
+  .panel-head .controls {
+    min-width: 0;
+  }
+
+  .controls select {
+    min-width: 0;
+    max-width: 100%;
+    text-overflow: ellipsis;
+  }
+
   /* A tooltip on a phone is as wide as the chart it came from, so cap it by the chart and
      take back the wide side gutters. */
   .chart-tooltip {
     max-width: 100%;
     padding: var(--space-3) var(--space-4);
+  }
+}
+
+/* Fingertips need 44px; these controls are sized for a cursor at 31px. The media feature is
+   `pointer: coarse` rather than a width because a small tablet has the desktop's width and a
+   finger. */
+@media (pointer: coarse) {
+  .range-set button,
+  .theme-set button,
+  .pager button,
+  button.ghost {
+    min-height: 44px;
   }
 }
 

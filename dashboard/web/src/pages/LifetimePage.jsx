@@ -19,6 +19,8 @@ import {
   comparisons,
   computeStreaks,
   groupNumber,
+  HEATMAP_WEEKS,
+  HEATMAP_WEEKS_NARROW,
   hourLabel,
   peakOf,
   weekTotals,
@@ -37,8 +39,30 @@ import { ThemeControls } from "../components/ThemeControls.jsx";
  */
 const REFRESH_INTERVAL_MS = 60_000;
 
-/** Weeks of history the activity grid shows. 26 is half a year, and it fits without scrolling. */
-const HEATMAP_WEEKS = 26;
+/**
+ * The phone-width layout, as a live value.
+ *
+ * The activity grid has to pick a window before it draws, and the window depends on the width
+ * the strip will get: 26 weeks is 361px of squares, a phone card is 312px. The same 40rem the
+ * stylesheet uses for its narrow layout is the trigger, so the page and the CSS flip together.
+ *
+ * @returns {boolean} true while the viewport is at the phone-width layout
+ */
+const useNarrowViewport = () => {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_LAYOUT_QUERY).matches);
+
+  useEffect(() => {
+    const query = window.matchMedia(NARROW_LAYOUT_QUERY);
+    const onChange = (event) => setNarrow(event.matches);
+    query.addEventListener("change", onChange);
+    return () => query.removeEventListener("change", onChange);
+  }, []);
+
+  return narrow;
+};
+
+/** The stylesheet's narrow-layout breakpoint, shared by the CSS and the grid's week count. */
+const NARROW_LAYOUT_QUERY = "(max-width: 40rem)";
 
 /**
  * Today's calendar day in the browser's own zone, as `YYYY-MM-DD`.
@@ -289,7 +313,10 @@ const RecordBoard = ({ stats }) => {
 };
 
 /**
- * The activity grid: 26 week columns, Sunday at the top, one square per day.
+ * The activity grid: week columns, Sunday at the top, one square per day.
+ *
+ * The window is 26 weeks on a desktop and 13 on the phone layout, picked so the squares fit the
+ * card they are drawn in rather than scrolling inside it.
  *
  * The squares are sized in tokens by default because most usage here is priced at zero, so a
  * money-sized grid has holes in the days that did the most work. The toggle is the same
@@ -410,6 +437,7 @@ const ComparisonList = ({ lines }) => (
  */
 export const LifetimePage = ({ navigate }) => {
   const theme = useTheme();
+  const narrow = useNarrowViewport();
   const [refreshKey, setRefreshKey] = useState(0);
   const [metric, setMetric] = useState("tokens");
 
@@ -430,8 +458,8 @@ export const LifetimePage = ({ navigate }) => {
   const streaks = useMemo(() => computeStreaks(daily, today), [daily, today]);
   const level = useMemo(() => levelFromXp(xpFromTotals(stats?.totals)), [stats]);
   const grid = useMemo(
-    () => buildHeatmap(daily, { endDay: today, weeks: HEATMAP_WEEKS, metric }),
-    [daily, today, metric],
+    () => buildHeatmap(daily, { endDay: today, weeks: narrow ? HEATMAP_WEEKS_NARROW : HEATMAP_WEEKS, metric }),
+    [daily, today, metric, narrow],
   );
   const week = useMemo(() => weekTotals(daily, { endDay: today }), [daily, today]);
   const lines = useMemo(() => comparisons(stats), [stats]);

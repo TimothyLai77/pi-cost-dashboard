@@ -330,6 +330,21 @@ export const intensityFor = (value, max) => {
 };
 
 /**
+ * How many week columns the activity grid draws.
+ *
+ * The squares are `minmax(11px, 1fr)` columns with a 3px gap, so a window needs
+ * `weeks × 14px` of content width before the columns can shrink any further. 26 weeks is 361px,
+ * which is comfortable on a desktop and wider than a phone's card (312px inside a 390px screen,
+ * after the page gutter, the card padding and the weekday letters), so the phone window is 13
+ * weeks: 182px of content, 21px squares, and the strip fits its box instead of scrolling inside
+ * it. The pair is tested so the narrow window cannot quietly outgrow a phone.
+ */
+export const HEATMAP_WEEKS = 26;
+
+/** Week columns on the phone-width layout. @type {number} */
+export const HEATMAP_WEEKS_NARROW = 13;
+
+/**
  * The activity grid: weeks as columns, Sunday to Saturday as rows.
  *
  * The window is `weeks` whole columns ending with the column that contains `endDay`, each

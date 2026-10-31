@@ -29,6 +29,8 @@ import {
   weekdayOf,
   xpForLevel,
   xpFromTotals,
+  HEATMAP_WEEKS,
+  HEATMAP_WEEKS_NARROW,
 } from "../src/lifetime.js";
 
 test("shiftDay, daysBetween, and weekdayOf do calendar maths on plain day strings", () => {
@@ -258,6 +260,39 @@ test("buildHeatmap draws whole week columns from Sunday to Saturday", () => {
   const empty = buildHeatmap([], { endDay: null });
   assert.equal(empty.columns.length, 0);
   assert.equal(empty.endDay, null);
+});
+
+test("the activity grid's two windows fit the cards they are drawn in", () => {
+  // The stylesheet's squares are 11px columns with a 3px gap, so a window's content width is
+  // weeks x 14px. A 390px phone card leaves 312px after the page gutter, the card padding and
+  // the weekday letters, and 26 weeks needs 361px - which is how the strip ended up scrolling
+  // sideways inside its own card.
+  const SQUARE_PX = 11;
+  const GAP_PX = 3;
+  const PHONE_CARD_PX = 312;
+
+  assert.equal(HEATMAP_WEEKS, 26, "half a year on a desktop");
+  assert.equal(HEATMAP_WEEKS_NARROW, 13, "a quarter on a phone");
+  assert.equal(
+    HEATMAP_WEEKS * (SQUARE_PX + GAP_PX),
+    364,
+    "the desktop window is 364px of squares, which the desktop card stretches past anyway",
+  );
+  assert.equal(
+    HEATMAP_WEEKS_NARROW * (SQUARE_PX + GAP_PX) <= PHONE_CARD_PX,
+    true,
+    "the phone window fits its card instead of scrolling",
+  );
+  assert.equal(
+    HEATMAP_WEEKS_NARROW * (SQUARE_PX + GAP_PX),
+    182,
+    "13 weeks leaves room, which is what makes the phone squares 21px wide",
+  );
+
+  const daily = [{ day: "2026-01-04", totalTokens: 1_000, costMicros: 0 }];
+  const narrow = buildHeatmap(daily, { endDay: "2026-01-11", weeks: HEATMAP_WEEKS_NARROW });
+  assert.equal(narrow.columns.length, 13, "a full set of columns, the last one in progress");
+  assert.equal(narrow.startDay, "2025-10-19", "13 weeks back from Jan 11, Sunday to Sunday");
 });
 
 test("weekTotals reports the Sunday-to-today part of the current week", () => {
