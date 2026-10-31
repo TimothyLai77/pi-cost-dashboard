@@ -34,9 +34,8 @@ import {
   XP_PER_TOKEN,
 } from "../lifetime.js";
 import { useApi } from "../api.js";
-import { useTheme } from "../theme.js";
-import { PageNav } from "../components/PageNav.jsx";
 import { moneyBreakdown } from "../components/costParts.js";
+import { PageNav } from "../components/PageNav.jsx";
 import { ThemeControls } from "../components/ThemeControls.jsx";
 
 /**
@@ -540,11 +539,15 @@ const ComparisonList = ({ lines }) => (
 );
 
 /**
- * @param {{ navigate: (path: string) => void }} props
+ * @param {{
+ *   navigate: (path: string) => void,
+ *   theme: { preference: string, choose: (preference: string) => void },
+ *   compactNav: boolean, - the masthead keeps the page tabs and theme control on a phone,
+ *     where the rail is off screen until the drawer opens
+ * }} props
  * @returns {JSX.Element}
  */
-export const LifetimePage = ({ navigate }) => {
-  const theme = useTheme();
+export const LifetimePage = ({ navigate, theme, compactNav }) => {
   const narrow = useNarrowViewport();
   const [refreshKey, setRefreshKey] = useState(0);
   const [metric, setMetric] = useState("tokens");
@@ -603,8 +606,8 @@ export const LifetimePage = ({ navigate }) => {
           >
             <span className="sr-only">{lifetime.refreshing ? "Updating" : "Up to date"}</span>
           </span>
-          <PageNav path="/lifetime" navigate={navigate} />
-          <ThemeControls theme={theme} />
+          {compactNav && <PageNav path="/lifetime" navigate={navigate} />}
+          {compactNav && <ThemeControls theme={theme} />}
           <button type="button" className="ghost" onClick={reloadAll}>
             Refresh
           </button>

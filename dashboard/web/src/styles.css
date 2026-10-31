@@ -265,6 +265,187 @@ body {
   white-space: nowrap;
 }
 
+/* --- app shell: page rail and content column --- */
+
+/* Two columns, the rail sized to its own width. `minmax(0, 1fr)` on the content is what keeps a
+   wide chart or a wide table from pushing the rail off screen: a grid track's default minimum is
+   its content's minimum, and the session table's widest name would be the page's minimum width. */
+.shell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.shell-body {
+  min-width: 0;
+}
+
+/* Sticky so the page switcher and the theme control are on screen while the ledger scrolls.
+   100vh with `overflow: hidden` keeps the rail a column of its own: the collapse control sits at
+   its foot, and the collapsed width cannot be pushed open by a label inside it. */
+.rail {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 12rem;
+  height: 100vh;
+  padding: var(--space-4) var(--space-3);
+  border-right: 1px solid var(--rule);
+  background: var(--paper-raised);
+  overflow: hidden;
+  transition: width 160ms ease-out;
+}
+
+.rail[data-collapsed="true"] {
+  width: 3.5rem;
+}
+
+.rail-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.rail-brand {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: 1.0625rem;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.rail-mark {
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.rail-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2);
+  /* The active page is marked with a left accent bar rather than a border all round: a full box
+     in the rail reads as a button, and this is the page you are on. */
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  background: none;
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rail-link:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.rail-link[aria-current="page"] {
+  color: var(--ink);
+  background: var(--paper);
+  border-left-color: var(--live);
+  font-weight: 600;
+}
+
+.rail-icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.rail-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Collapsed, the rail is glyphs only. The words are removed rather than clipped, so a screen
+   reader gets the `aria-label` on the control and the collapsed rail is not one long clipped
+   sentence in the accessibility tree. */
+.rail[data-collapsed="true"] .rail-label {
+  display: none;
+}
+
+.rail[data-collapsed="true"] .rail-link,
+.rail[data-collapsed="true"] .rail-toggle,
+.rail[data-collapsed="true"] .rail-theme-cycle {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.rail-theme {
+  margin-top: var(--space-2);
+}
+
+/* The masthead's row of three becomes a column: the rail is a vertical list, and a stacked set
+   of buttons lines up with the page links above it. */
+.rail .theme-set {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail .theme-set button {
+  border-right: 0;
+  border-bottom: 1px solid var(--rule-strong);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+}
+
+.rail .theme-set button:last-child {
+  border-bottom: 0;
+}
+
+.rail-theme-cycle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--rule-strong);
+  background: var(--paper-raised);
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.rail-theme-cycle:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.rail-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: auto;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink-faint);
+  font-family: var(--font-numeral);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.rail-toggle:hover {
+  color: var(--ink);
+  background: var(--paper);
+}
+
 /* --- eyebrow labels --- */
 
 .eyebrow {
@@ -1190,6 +1371,17 @@ button.ghost {
 
   .page {
     padding: var(--space-4) var(--space-3) var(--space-5);
+  }
+
+  /* The rail is off screen on a phone: 12rem of a 390px screen is a third of the width for two
+     controls, and the daily chart and the session table are what need that width. On a phone the
+     masthead keeps the page tabs and the theme control instead - see `compactNav` in AppShell. */
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rail {
+    display: none;
   }
 
   .summary-grid {
