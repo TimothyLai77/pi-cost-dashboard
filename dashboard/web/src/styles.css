@@ -45,6 +45,23 @@
      confident ink rule on paper becomes a glaring lit line on a dark surface. */
   --rule-accent: var(--ink);
 
+  /* The activity grid's ramp. Solid hues on purpose: the chart tokens above are translucent
+     tints, and mixing a translucent hue against the panel moves each step about three percent,
+     which is how four colors end up reading as one. A solid hue mixed 25 / 50 / 75 / 100 against
+     the panel gives four steps you can tell apart in a row of squares. The light theme uses the
+     deep ends of the same two families the charts already speak in - cool steel for tokens, warm
+     ink for money. */
+  --heat-volume: #12707a;
+  --heat-money: #8a5410;
+
+  /* Grid geometry. The columns are `minmax(11px, 1fr)` tracks, so the strip spans its card at any
+     window size and the squares stretch with it; the cell height is what keeps a 26-week strip a
+     strip and not a full-height block. */
+  --heat-cell-h: 22px;
+  --heat-gap: 3px;
+  --heat-col-min: 11px;
+  --heat-month-row: 12px;
+
   --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
   --font-numeral: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
@@ -98,6 +115,11 @@
   --flow-5: #6cc7dd;
   --flow-6: #d9798c;
   --flow-7: #9aa7b4;
+
+  /* The activity grid's ramp on a dark panel: lit hues, so the steps run from a faint glow to
+     full saturation against the dark panel. */
+  --heat-volume: #4fc4cf;
+  --heat-money: #e9b949;
 
   /* Softened to silver. Full ink on dark slate is 14.8:1 and reads as a lit line; the
      ledger's rule should be the strongest line on the page, not the brightest. */
@@ -893,8 +915,10 @@ button.ghost {
 
 /* --- lifetime page: activity grid --- */
 
-/* Week columns, Sunday at the top. The squares are the width of a chart tick (11px) so 26
-   weeks fit a ledger page without scrolling, and the grid scrolls on its own when they do not. */
+/* Week columns, Sunday at the top. The columns are `1fr` tracks, so the strip spans its card
+   instead of stopping a third of the way across it; `--heat-cell-h` is what keeps a 26-week strip
+   a strip and not a full-height block. The month ticks are positioned as a share of the grid, so
+   they sit over their own week at any width. */
 .heatmap-body {
   display: flex;
   gap: var(--space-3);
@@ -902,37 +926,43 @@ button.ghost {
 
 .heatmap-weeks {
   display: grid;
-  grid-template-rows: repeat(7, 11px);
-  gap: 3px;
-  /* Lines up with the squares, so it starts under the month row: 10px of label plus the gap. */
-  padding-top: calc(10px + var(--space-1));
+  grid-template-rows: repeat(7, var(--heat-cell-h));
+  gap: var(--heat-gap);
+  /* Lines up with the squares, so it starts under the month row. */
+  padding-top: calc(var(--heat-month-row) + var(--space-1));
   color: var(--ink-faint);
 }
 
 .heatmap-weeks span {
-  height: 11px;
-  line-height: 11px;
+  height: var(--heat-cell-h);
+  line-height: var(--heat-cell-h);
   text-align: center;
 }
 
 .heatmap-main {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-1);
-  justify-content: start;
+  /* The weekday letters take their own width and the strip takes all of the rest, which is what
+     lets the `1fr` columns stretch at all - a flex item sized to its content would hand them 11px
+     each and the strip would stop a third of the way across the card. */
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
 }
 
-/* One label per column, wider than the column it sits over. The text is allowed to spill and
-   overlap the empty space of the next columns, which is how a month tick reads on a grid. */
+/* One label per column, positioned at its column's own share of the grid. The text is wider than
+   a column and is allowed to spill, which is how a month tick reads on a grid. */
 .heatmap-months {
-  display: flex;
-  gap: 3px;
+  position: relative;
+  height: var(--heat-month-row);
   font-size: 0.625rem;
   letter-spacing: 0.06em;
 }
 
 .heatmap-months span {
-  flex: 0 0 11px;
+  position: absolute;
+  left: calc(var(--week) * 100% / var(--weeks));
   white-space: nowrap;
   color: var(--ink-faint);
 }
@@ -940,37 +970,36 @@ button.ghost {
 .heatmap-grid {
   display: grid;
   grid-auto-flow: column;
-  grid-template-rows: repeat(7, 11px);
-  grid-auto-columns: 11px;
-  gap: 3px;
-  justify-content: start;
+  grid-template-rows: repeat(7, var(--heat-cell-h));
+  grid-auto-columns: minmax(var(--heat-col-min), 1fr);
+  gap: var(--heat-gap);
 }
 
-/* Square darkness. The hue follows the unit the squares are sized in, so the grid is visibly
-   a money grid or a tokens grid rather than a neutral blob: cool steel for tokens, the ledger's
-   warm ink for money. `color-mix` steps the hue against the panel, and the plain `--rule`
-   declared first is the track a browser without color-mix still shows. */
+/* Square saturation, and the hue follows the unit the squares are sized in, so the grid is
+   visibly a money grid or a tokens grid rather than a neutral blob: cool steel for tokens, the
+   ledger's warm ink for money. The plain `--rule` declared first is the track a browser without
+   color-mix still shows. */
 .heat-cell {
-  width: 11px;
-  height: 11px;
+  height: var(--heat-cell-h);
+  border-radius: 3px;
   background: var(--rule);
-  --heat-hue: var(--volume);
+  --heat-hue: var(--heat-volume);
 }
 
 .heatmap[data-metric="cost"] .heat-cell {
-  --heat-hue: var(--money);
+  --heat-hue: var(--heat-money);
 }
 
 .heat-cell[data-level="1"] {
-  background: color-mix(in srgb, var(--heat-hue) 22%, var(--paper-raised));
+  background: color-mix(in srgb, var(--heat-hue) 25%, var(--paper-raised));
 }
 
 .heat-cell[data-level="2"] {
-  background: color-mix(in srgb, var(--heat-hue) 45%, var(--paper-raised));
+  background: color-mix(in srgb, var(--heat-hue) 50%, var(--paper-raised));
 }
 
 .heat-cell[data-level="3"] {
-  background: color-mix(in srgb, var(--heat-hue) 70%, var(--paper-raised));
+  background: color-mix(in srgb, var(--heat-hue) 75%, var(--paper-raised));
 }
 
 .heat-cell[data-level="4"] {
@@ -998,6 +1027,15 @@ button.ghost {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-faint);
+}
+
+/* The legend squares are `.heat-cell` spans, so their fills come from the grid rules above and
+   can never drift from what the grid draws. Only their size is theirs: 11px, and a fixed width
+   because a flex item with no width collapses to nothing. */
+.heat-legend .heat-cell {
+  flex: 0 0 11px;
+  width: 11px;
+  height: 11px;
 }
 
 /* --- lifetime page: the comparisons --- */

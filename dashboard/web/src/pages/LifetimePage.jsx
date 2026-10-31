@@ -322,6 +322,8 @@ const ActivityGrid = ({ grid, metric, onMetric, dayIndex }) => {
     className="heatmap"
     data-metric={metric}
     role="img"
+    /* The month ticks are positioned as a share of the strip, so they need the column count. */
+    style={{ "--weeks": grid.columns.length }}
     aria-label={`${grid.activeDays} active days in the last ${grid.columns.length} weeks, squares sized in ${
       metric === "cost" ? "money" : "tokens"
     }`}
@@ -335,7 +337,9 @@ const ActivityGrid = ({ grid, metric, onMetric, dayIndex }) => {
         <div className="heatmap-main">
           <div className="heatmap-months eyebrow" aria-hidden="true">
             {months.map((name, index) => (
-              <span key={index}>{name}</span>
+              <span key={index} style={{ "--week": index }}>
+                {name}
+              </span>
             ))}
           </div>
           <div className="heatmap-grid">

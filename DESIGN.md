@@ -1102,11 +1102,16 @@ The drawings, all in `web/src/lifetime.js`, all pure and tested:
   not money burned. Levels grow on a power curve (`25,000 × (n−1)^1.6`), so each one takes
   longer than the last, and the gap to the next is also translated into tokens — "3,361 XP" is
   abstract, "about 3.4M tokens" is one short session.
-- **The activity grid** is 26 week columns, Sunday at the top, sized in tokens by default
-  because a money-sized grid has holes in the days that did the most work. Square darkness is
+- **The activity grid** is week columns, Sunday at the top, sized in tokens by default
+  because a money-sized grid has holes in the days that did the most work. The columns are
+  `1fr` tracks, so the strip spans its card at any window width rather than stopping a third
+  of the way across it, and a fixed row height keeps a 26-week strip a strip. Square darkness is
   a square-root scale of the window's maximum, so one record day cannot flatten every ordinary
   day into the lightest band. The unit is a Money / Tokens toggle, and the squares take the
   hue of the unit they are sized in: cool steel for tokens, the ledger's warm ink for money.
+  Those two hues are their own tokens (`--heat-volume`, `--heat-money`) and are solid in both
+  themes: the chart fills are translucent tints, and mixing a translucent tint against the panel
+  moves each band about three percent, which is how four bands end up reading as one pale wash.
 - **The comparisons** translate the totals into things a person can picture (lattes, hours of
   typing replaced, pages of prose). They are estimates at fixed published rates, labelled as
   estimates on the panel and with the rate in each line's tooltip. Prose lines use fresh
