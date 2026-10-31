@@ -355,7 +355,30 @@ export const HEATMAP_WEEKS_NARROW = 13;
  *
  * @type {string[]}
  */
-export const QUIPS = [];
+export const QUIPS = [
+  "A penny saved is a GPU hour wasted.",
+  "Why solve it in 100 tokens when you can solve it in 100,000?",
+  "Your agent is thinking very hard about being wrong.",
+  "Congratulations on automating a task that took 11 seconds.",
+  "You gotta keep the AI bubble inflated somehow...",
+  "Context window looking looking a little empty. Are you even trying to warm the planet?",
+  "Spending $0.40 in API fees to save $0.02 of human effort.",
+  "A 40-step agent loop just to return null.",
+  "Burning carbon so you don't have to write a Regex.",
+  "Cooking the planet to avoid reading the documentation.",
+  "Spend money to save money. Eventually.",
+  "A dollar of inference to save a penny of labour.",
+  "Another day, another subsidized hallucination.",
+  "The business model is somewhere in the context window.",
+  "Have you considered using more electricity to think less?",
+  "Every token is a small contribution to climate change.",
+  "The planet isn't going to warm itself.",
+  "Generating 4,000 tokens to avoid a Google search. Sustainable.",
+  "Mother Nature would like you to switch to Haiku.",
+  "Four agents, two dozen tool calls, zero useful outcomes.",
+  "Who is JSON?",
+  "Somewhere, a GPU is collateralizing another GPU.",
+];
 
 /**
  * Which commentary line to show.
