@@ -884,8 +884,14 @@ button.ghost {
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
 }
 
+/* Four cells and a nudge line, on explicit tracks. `repeat(auto-fit, minmax(10rem, 1fr))` is what
+   the other grids here use and it does not work for this one: auto-fit collapses a repeated track
+   only when it is empty in *every* row, and the nudge spans `1 / -1`, so it occupies the trailing
+   tracks in its own row and none of them collapse. The row then lays out 7 tracks for 4 cells -
+   measured 168px x 7 in a 1182px panel at 1280 - and the cells stop at 675px with 507px of empty
+   tracks, in the grid's rule colour, on the right. Explicit tracks fill the row at any width. */
 .streak-grid {
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 /* The sentence under the streak spans the row: it is the page's one nudge, and it needs the
@@ -1175,6 +1181,11 @@ button.ghost {
   /* Two hero columns become one, and the level bar keeps its full width. */
   .hero-totals {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Two streak cells across, so the day ranges under them stay readable. */
+  .streak-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .page {
