@@ -60,7 +60,7 @@
   --heat-cell-h: 22px;
   --heat-gap: 3px;
   --heat-col-min: 11px;
-  --heat-month-row: 12px;
+  --heat-month-row: 15px;
 
   --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
@@ -72,6 +72,11 @@
   --space-4: 1rem;
   --space-5: 1.5rem;
   --space-6: 2.5rem;
+
+  /* The rail's inner axis. Everything inside the rail's 12px side padding steps in by this much, so
+     the brand mark, the page glyphs, the theme column, and the collapse control start on one edge.
+     It equals the page links' own inset: a 2px accent slot plus 8px of button padding. */
+  --rail-inset: 10px;
 
   --measure: 78rem;
   color-scheme: light;
@@ -194,6 +199,25 @@ body {
   margin-bottom: var(--space-5);
 }
 
+/* The masthead's controls hug the right edge on one line.
+   The plain `.controls` group there is a shrinkable flex item, so it collapsed to its min-content
+   width and split its own two controls across two rows: the dot row ended flush with the masthead's
+   right edge and the Refresh row ended 83px short of it, in the middle of the masthead. And a
+   wrapped flex group lays its rows by `align-content: flex-end`, which packs a short trailing row
+   against the bottom-LEFT of the box - 16px short of the edge every panel under it lines up to.
+   `flex: 0 0 auto` keeps the group at its content width, `margin-left: auto` pins it to the right
+   edge (which is also what lands it on the right when the masthead wraps it onto its own row on a
+   phone), `align-content: flex-start` lays its rows from the top, and `align-items: center` centers
+   the status dot on the Refresh button beside it. */
+.masthead .controls {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: flex-end;
+  align-items: center;
+  justify-content: flex-end;
+  align-content: flex-start;
+}
+
 .masthead h1 {
   font-family: var(--font-display);
   font-weight: 600;
@@ -307,6 +331,7 @@ body {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  padding-left: var(--rail-inset);
 }
 
 .rail-brand {
@@ -392,8 +417,10 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Collapsed, the mark sits over the glyphs it heads rather than at the rail's left edge. */
+/* Collapsed, the mark sits over the glyphs it heads rather than at the rail's left edge. The
+   brand's inset goes back to zero here: the head is centered, so an inset would shift it. */
 .rail[data-collapsed="true"] .rail-top {
+  padding-left: 0;
   justify-content: center;
 }
 
@@ -419,11 +446,26 @@ body {
   border-right-width: 2px;
 }
 
+/* Collapsed, the rail is 3.5rem of glyphs: the inner axis has nothing to step in to, and side
+   margins would shrink the theme control to a 12px box around a 20px glyph. The glyph centers
+   fill the rail instead. */
+.rail[data-collapsed="true"] .rail-theme {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.rail[data-collapsed="true"] .rail-toggle {
+  padding-left: 0;
+}
+
 /* The theme control and the collapse control ride at the foot of the rail: `margin-top: auto`
-   pushes them down so the page links stay at the top of the column. */
+   pushes them down so the page links stay at the top of the column. The side margins keep the
+   column on the rail's inner axis. */
 .rail-theme {
   margin-top: auto;
   margin-bottom: var(--space-2);
+  margin-left: var(--rail-inset);
+  margin-right: var(--rail-inset);
 }
 
 /* The masthead's row of three becomes a column: the rail is a vertical list, and a stacked set
@@ -465,6 +507,9 @@ body {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2);
+  /* A 1px border against the links' 2px accent slot, so the label starts on the same edge as the
+     page labels above it. */
+  padding-left: calc(var(--rail-inset) - 1px);
   border: 1px solid transparent;
   background: none;
   color: var(--ink-faint);
@@ -1070,6 +1115,14 @@ button.ghost {
   letter-spacing: -0.03em;
 }
 
+/* The hero pair sits at the top of the page as a block of its own, and the panels below it keep
+   the 16px rhythm the rest of the page uses. With no margin here the streaks panel's rule printed
+   directly against the hero grid's rule - the only two blocks on either page with nothing between
+   them. */
+.lifetime-hero {
+  margin-bottom: var(--space-4);
+}
+
 .hero-totals,
 .record-grid,
 .streak-grid {
@@ -1445,6 +1498,15 @@ button.ghost {
     border: 0;
     background: rgb(0 0 0 / 0.45);
     cursor: pointer;
+  }
+
+  /* The drawer has its own close control at the head of the rail, and the scrim closes it too, so
+     the corner menu button has nothing left to do while the drawer is open. It is the same 40px
+     square as the close control, one row above it, and leaving it on screen reads as two menu
+     buttons stacked. `display: none` also takes it out of the tab order. The shell carries the
+     open flag, so the rule does not depend on the button's position in the DOM. */
+  .shell[data-drawer-open="true"] .rail-menu {
+    display: none;
   }
 
   /* The menu button is the shell's, not the masthead's: the masthead belongs to the page, and the
