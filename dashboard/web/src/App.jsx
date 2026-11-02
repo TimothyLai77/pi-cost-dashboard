@@ -26,10 +26,8 @@ import { CostChart } from "./components/CostChart.jsx";
 import { FlowsChart } from "./components/FlowsChart.jsx";
 import { HourChart } from "./components/HourChart.jsx";
 import { ModelBreakdown } from "./components/ModelBreakdown.jsx";
-import { PageNav } from "./components/PageNav.jsx";
 import { SessionTable } from "./components/SessionTable.jsx";
 import { SummaryCards } from "./components/SummaryCards.jsx";
-import { ThemeControls } from "./components/ThemeControls.jsx";
 import { LifetimePage } from "./pages/LifetimePage.jsx";
 
 const RANGES = [
@@ -102,16 +100,11 @@ const ErrorState = ({ message, hint }) => (
 
 /**
  * The ledger page: summary strip, daily chart with the hour drill-down, sessions, flows,
- * models. `theme` and the phone-only masthead controls come from `AppShell`, which owns them so
- * there is one theme state in the app rather than one per page.
- * @param {{
- *   navigate: (path: string) => void,
- *   theme: { preference: string, choose: (preference: string) => void },
- *   compactNav: boolean,
- * }} props
+ * models. The page switcher and the theme control live in the app rail on every layout, so the
+ * masthead carries only this page's title, its refresh status, and the Refresh button.
  * @returns {JSX.Element}
  */
-const LedgerPage = ({ navigate, theme, compactNav }) => {
+const LedgerPage = () => {
   const [rangeIndex, setRangeIndex] = useState(1);
   const [project, setProject] = useState("");
   const [provider, setProvider] = useState("");
@@ -276,8 +269,6 @@ const LedgerPage = ({ navigate, theme, compactNav }) => {
           >
             <span className="sr-only">{refreshing ? "Updating" : "Up to date"}</span>
           </span>
-          {compactNav && <PageNav path="/" navigate={navigate} />}
-          {compactNav && <ThemeControls theme={theme} />}
           <button type="button" className="ghost" onClick={reloadAll}>
             Refresh
           </button>
@@ -500,7 +491,8 @@ const LedgerPage = ({ navigate, theme, compactNav }) => {
 /**
  * The app shell: the rail, the theme state, the phone layout flag, and the page the route selects.
  *
- * `theme` is owned here because the rail carries the control, and both pages take it as a prop.
+ * `theme` is owned here because the rail carries the only theme control, on every layout. The
+ * pages take no theme prop.
  * One owner means one localStorage write per change and no second copy of the setting going
  * stale in a page that is not on screen.
  *
@@ -556,12 +548,7 @@ const AppShell = () => {
     setRestoreFocusToMenu(false);
   }, [restoreFocusToMenu, drawerOpen]);
 
-  const page =
-    path === "/lifetime" ? (
-      <LifetimePage navigate={navigate} theme={theme} compactNav={isPhone} />
-    ) : (
-      <LedgerPage navigate={navigate} theme={theme} compactNav={isPhone} />
-    );
+  const page = path === "/lifetime" ? <LifetimePage /> : <LedgerPage />;
 
   return (
     <div className="shell">

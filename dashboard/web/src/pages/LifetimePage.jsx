@@ -35,8 +35,6 @@ import {
 } from "../lifetime.js";
 import { useApi } from "../api.js";
 import { moneyBreakdown } from "../components/costParts.js";
-import { PageNav } from "../components/PageNav.jsx";
-import { ThemeControls } from "../components/ThemeControls.jsx";
 
 /**
  * Seconds between refreshes. Longer than the ledger's: these are all-time totals, and the
@@ -539,15 +537,11 @@ const ComparisonList = ({ lines }) => (
 );
 
 /**
- * @param {{
- *   navigate: (path: string) => void,
- *   theme: { preference: string, choose: (preference: string) => void },
- *   compactNav: boolean, - the masthead keeps the page tabs and theme control on a phone,
- *     where the rail is off screen until the drawer opens
- * }} props
+ * The page switcher and the theme control live in the app rail on every layout, so the masthead
+ * carries only this page's title, its refresh status, and the Refresh button.
  * @returns {JSX.Element}
  */
-export const LifetimePage = ({ navigate, theme, compactNav }) => {
+export const LifetimePage = () => {
   const narrow = useNarrowViewport();
   const [refreshKey, setRefreshKey] = useState(0);
   const [metric, setMetric] = useState("tokens");
@@ -606,8 +600,6 @@ export const LifetimePage = ({ navigate, theme, compactNav }) => {
           >
             <span className="sr-only">{lifetime.refreshing ? "Updating" : "Up to date"}</span>
           </span>
-          {compactNav && <PageNav path="/lifetime" navigate={navigate} />}
-          {compactNav && <ThemeControls theme={theme} />}
           <button type="button" className="ghost" onClick={reloadAll}>
             Refresh
           </button>

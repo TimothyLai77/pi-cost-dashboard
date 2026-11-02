@@ -137,7 +137,6 @@ dashboard/
             ├── SummaryCards.jsx
             ├── CostChart.jsx
             ├── ModelBreakdown.jsx
-            ├── PageNav.jsx      # the Ledger / Lifetime tabs
             ├── ThemeControls.jsx
             └── SessionTable.jsx
 ```
