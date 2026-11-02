@@ -392,7 +392,12 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Collapsed, the rail is glyphs only. The words are removed rather than clipped, so a screen
+/* Collapsed, the mark sits over the glyphs it heads rather than at the rail's left edge. */
+.rail[data-collapsed="true"] .rail-top {
+  justify-content: center;
+}
+
+/* Collapsed, the words are removed rather than clipped, so a screen
    reader gets the `aria-label` on the control and the collapsed rail is not one long clipped
    sentence in the accessibility tree. */
 .rail[data-collapsed="true"] .rail-label {
@@ -407,8 +412,18 @@ body {
   padding-left: 0;
 }
 
+/* The accent bar on the active page is 2px against the links' 1px border, and that 1px difference
+   shifts a centered glyph half a pixel off the rail's axis. Matching transparent bar on the
+   right puts the glyphs, the theme control, and the mark above them all on the same center. */
+.rail[data-collapsed="true"] .rail-link {
+  border-right-width: 2px;
+}
+
+/* The theme control and the collapse control ride at the foot of the rail: `margin-top: auto`
+   pushes them down so the page links stay at the top of the column. */
 .rail-theme {
-  margin-top: var(--space-2);
+  margin-top: auto;
+  margin-bottom: var(--space-2);
 }
 
 /* The masthead's row of three becomes a column: the rail is a vertical list, and a stacked set
@@ -449,7 +464,6 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-top: auto;
   padding: var(--space-2);
   border: 1px solid transparent;
   background: none;
