@@ -6,7 +6,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +16,7 @@ import { upsertSession } from "../upsert.js";
 import { isExcluded, liftTombstone, purgeSession, tombstoneSession } from "../incognito.js";
 import { CONTRACT_KEYS, SCHEMA_VERSION, TOMBSTONE_SCHEMA_VERSION, ingestSession, validateTombstonePayload } from "../ingest.js";
 import { aggregateSession } from "../scanner/aggregate.js";
+import { scanSessions } from "../scanner/scan.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
@@ -201,6 +203,38 @@ test("an ingest tombstone after partial pushes purges the stored rows", () => {
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM usage_events").get().n, 0, "facts went by cascade");
 
   db.close();
+});
+
+test("a scan skips tombstoned files and remembers them for warm scans", () => {
+  const db = migratedDb();
+  const dir = mkdtempSync(join(tmpdir(), "pi-cost-incognito-scan-"));
+  try {
+    const incognitoFile = join(dir, "session-a.jsonl");
+    copyFileSync(join(fixturesDir, "full-usage.jsonl"), incognitoFile);
+    copyFileSync(join(fixturesDir, "usage-only.jsonl"), join(dir, "session-b.jsonl"));
+
+    const sessionId = aggregateSession(incognitoFile).session.sessionId;
+    tombstoneSession(db, sessionId);
+
+    const cold = scanSessions(dir, db);
+    assert.equal(cold.tombstoned, 1);
+    assert.equal(cold.updated, 1, "only the ordinary session is stored");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sessions").get().n, 1);
+
+    const warm = scanSessions(dir, db);
+    assert.equal(warm.scanned, 0, "both files are cache-skipped, the tombstone is not re-parsed");
+    assert.equal(warm.skipped, 2);
+    assert.equal(warm.tombstoned, 0, "the tombstone never reaches the parse step again");
+
+    // Lifting the tombstone makes the next scan of a changed file store it normally.
+    liftTombstone(db, sessionId);
+    writeFileSync(incognitoFile, readFileSync(incognitoFile, "utf8") + "\n");
+    const lifted = scanSessions(dir, db, { force: true });
+    assert.equal(lifted.updated, 2, "after lifting, both sessions land");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    db.close();
+  }
 });
 
 test("tombstone validation rejects junk the same way snapshots do", () => {

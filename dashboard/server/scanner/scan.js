@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { aggregateSession } from "./aggregate.js";
 import { upsertSession } from "../upsert.js";
+import { isExcluded } from "../incognito.js";
 
 /**
  * Directory names that hold JSONL which is not a Pi session.
@@ -73,16 +74,40 @@ const needsRescan = (db, filePath) => {
 };
 
 /**
+ * Record a file's (mtime, size) pair so the next warm scan skips it.
+ *
+ * @param {import("better-sqlite3").Database} db
+ * @param {string} filePath
+ * @param {string} sessionId
+ * @returns {void}
+ */
+const markScanned = (db, filePath, sessionId) => {
+  const stats = statSync(filePath);
+  db.prepare(`
+    INSERT INTO scan_state (session_file, session_id, mtime_ms, size_bytes, scanned_at)
+    VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    ON CONFLICT (session_file) DO UPDATE SET
+      session_id = excluded.session_id,
+      mtime_ms   = excluded.mtime_ms,
+      size_bytes = excluded.size_bytes,
+      scanned_at = excluded.scanned_at
+  `).run(filePath, sessionId, Math.round(stats.mtimeMs), stats.size);
+};
+
+/**
  * Scan the sessions directory and write changes to the database.
  *
  * Files Pi has deleted are removed from the database, cascading to their facts, so the
  * dashboard mirrors the files rather than accumulating ghosts.
  *
+ * Incognito tombstones are skipped: nothing is stored for the file, but its (mtime, size)
+ * pair is recorded, so warm scans keep skipping it instead of re-parsing every pass.
+ *
  * @param {string} sessionsDir Absolute path to the Pi sessions directory
  * @param {import("better-sqlite3").Database} db
  * @param {{ force?: boolean }} [options] force rescans every file, ignoring the cache
  * @returns {{ scanned: number, skipped: number, updated: number, deleted: number,
- *             rejected: number, files: number, ms: number, skippedLines: number }}
+ *             rejected: number, tombstoned: number, files: number, ms: number, skippedLines: number }}
  */
 export const scanSessions = (sessionsDir, db, options = {}) => {
   const startedAt = performance.now();
@@ -92,6 +117,7 @@ export const scanSessions = (sessionsDir, db, options = {}) => {
   let skipped = 0;
   let updated = 0;
   let rejected = 0;
+  let tombstoned = 0;
   let skippedLines = 0;
 
   for (const filePath of files) {
@@ -110,18 +136,16 @@ export const scanSessions = (sessionsDir, db, options = {}) => {
       continue;
     }
 
+    // Incognito: mark the file scanned so warm passes skip it, and store nothing.
+    if (isExcluded(db, session.sessionId)) {
+      tombstoned += 1;
+      markScanned(db, filePath, session.sessionId);
+      continue;
+    }
+
     if (upsertSession(db, session, events, "scan")) updated += 1;
 
-    const stats = statSync(filePath);
-    db.prepare(`
-      INSERT INTO scan_state (session_file, session_id, mtime_ms, size_bytes, scanned_at)
-      VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-      ON CONFLICT (session_file) DO UPDATE SET
-        session_id = excluded.session_id,
-        mtime_ms   = excluded.mtime_ms,
-        size_bytes = excluded.size_bytes,
-        scanned_at = excluded.scanned_at
-    `).run(filePath, session.sessionId, Math.round(stats.mtimeMs), stats.size);
+    markScanned(db, filePath, session.sessionId);
   }
 
   const knownFiles = new Set(files);
@@ -144,6 +168,7 @@ export const scanSessions = (sessionsDir, db, options = {}) => {
     updated,
     deleted: missing.length,
     rejected,
+    tombstoned,
     files: files.length,
     skippedLines,
     ms: Math.round(performance.now() - startedAt),
