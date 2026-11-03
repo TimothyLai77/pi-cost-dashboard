@@ -6,12 +6,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { migrateUp, openDatabase } from "../db.js";
 import { upsertSession } from "../upsert.js";
 import { isExcluded, liftTombstone, purgeSession, tombstoneSession } from "../incognito.js";
+import { CONTRACT_KEYS, SCHEMA_VERSION, TOMBSTONE_SCHEMA_VERSION, ingestSession, validateTombstonePayload } from "../ingest.js";
 import { aggregateSession } from "../scanner/aggregate.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +35,46 @@ const migratedDb = () => {
  * @returns {{ session: object, events: object[] }}
  */
 const loadFixture = (name) => aggregateSession(join(fixturesDir, name));
+
+/**
+ * A valid v2 ingest payload built from a fixture.
+ * @param {string} [fixture] Fixture file name
+ * @returns {object}
+ */
+const pushPayload = (fixture = "full-usage.jsonl") => {
+  const { session, events } = loadFixture(fixture);
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    sessionId: session.sessionId,
+    sessionFile: session.sessionFile,
+    cwd: session.cwd,
+    name: session.name,
+    parentSessionId: session.parentSessionId,
+    startedAt: session.startedAt,
+    lastActivityAt: session.lastActivityAt,
+    entryCount: session.entryCount,
+    totals: {
+      costMicros: session.costMicros,
+      costInputMicros: session.costInputMicros,
+      costOutputMicros: session.costOutputMicros,
+      costCacheReadMicros: session.costCacheReadMicros,
+      costCacheWriteMicros: session.costCacheWriteMicros,
+      inputTokens: session.inputTokens,
+      outputTokens: session.outputTokens,
+      cacheReadTokens: session.cacheReadTokens,
+      cacheWriteTokens: session.cacheWriteTokens,
+      totalTokens: session.totalTokens,
+      userMessages: session.userMessages,
+      assistantMessages: session.assistantMessages,
+      toolCalls: session.toolCalls,
+      toolResults: session.toolResults,
+      totalMessages: session.totalMessages,
+    },
+    events,
+    reportedBy: "agent_settled",
+    reportedAt: session.lastActivityAt,
+  };
+};
 
 test("a tombstoned session refuses scans and pushes alike", () => {
   const db = migratedDb();
@@ -114,4 +156,81 @@ test("tombstones are invisible to the rollups the dashboard reads", () => {
   assert.equal(totals.cost, 100000);
 
   db.close();
+});
+
+test("a v3 tombstone payload records, purges, and lifts through ingest", () => {
+  const db = migratedDb();
+  const sessionId = aggregateSession(join(fixturesDir, "full-usage.jsonl")).session.sessionId;
+
+  // Tombstone first, so the snapshot that follows must refuse to land.
+  const tombstone = { schemaVersion: TOMBSTONE_SCHEMA_VERSION, sessionId, incognito: true };
+  const first = ingestSession(db, tombstone);
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body, { ok: true, sessionId, incognito: true, purged: 0 });
+
+  const blocked = ingestSession(db, pushPayload("full-usage.jsonl"));
+  assert.equal(blocked.status, 409, "a push to a tombstoned id answers incognito, not stale");
+  assert.equal(blocked.body.error, "incognito");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sessions").get().n, 0);
+
+  // Lift, and the same snapshot lands normally.
+  const lifted = ingestSession(db, { schemaVersion: TOMBSTONE_SCHEMA_VERSION, sessionId, incognito: false });
+  assert.equal(lifted.status, 200);
+  assert.equal(lifted.body.incognito, false);
+
+  const landed = ingestSession(db, pushPayload("full-usage.jsonl"));
+  assert.equal(landed.body.applied, true);
+
+  db.close();
+});
+
+test("an ingest tombstone after partial pushes purges the stored rows", () => {
+  const db = migratedDb();
+  const payload = pushPayload("full-usage.jsonl");
+  ingestSession(db, payload);
+
+  const { status, body } = ingestSession(db, {
+    schemaVersion: TOMBSTONE_SCHEMA_VERSION,
+    sessionId: payload.sessionId,
+    incognito: true,
+  });
+
+  assert.equal(status, 200);
+  assert.equal(body.purged, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sessions").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM usage_events").get().n, 0, "facts went by cascade");
+
+  db.close();
+});
+
+test("tombstone validation rejects junk the same way snapshots do", () => {
+  const sessionId = aggregateSession(join(fixturesDir, "full-usage.jsonl")).session.sessionId;
+  const base = { schemaVersion: TOMBSTONE_SCHEMA_VERSION, sessionId, incognito: true };
+
+  assert.equal(validateTombstonePayload(base).ok, true);
+  assert.equal(validateTombstonePayload({ ...base, extra: 1 }).error, "unknown_field");
+  assert.equal(validateTombstonePayload({ ...base, schemaVersion: 2 }).error, "unsupported_schema_version");
+  assert.equal(validateTombstonePayload({ ...base, sessionId: "not-a-uuid" }).reason, "must be a UUID");
+  assert.equal(validateTombstonePayload({ ...base, incognito: "yes" }).reason, "must be a boolean");
+  assert.equal(validateTombstonePayload(null).status, 400);
+  assert.equal(validateTombstonePayload([1, 2]).status, 400);
+});
+
+test("tombstone.schema.json and the hand-written validator agree on fields", () => {
+  const contract = JSON.parse(
+    readFileSync(join(here, "..", "..", "..", "pi-extension", "tombstone.schema.json"), "utf8"),
+  );
+  const sorted = (list) => [...list].sort();
+
+  assert.deepEqual(
+    sorted(Object.keys(contract.properties)),
+    sorted(CONTRACT_KEYS.tombstone),
+    "tombstone fields",
+  );
+  assert.deepEqual(
+    sorted(contract.required),
+    sorted(CONTRACT_KEYS.tombstoneRequired),
+    "tombstone required fields",
+  );
+  assert.equal(contract.properties.schemaVersion.const, TOMBSTONE_SCHEMA_VERSION);
 });

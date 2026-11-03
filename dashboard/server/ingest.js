@@ -14,13 +14,21 @@
  *
  * The third kind of check is new in version 2: the four cost components must add up to the
  * total they are reported next to, per event and per session. Version 2 is the only version
- * accepted, and it requires all four, so every stored row has a split.
+ * accepted for snapshots, and it requires all four, so every stored row has a split.
+ *
+ * Version 3 is a second payload shape, not a snapshot revision: the incognito tombstone.
+ * It carries a session UUID and a boolean, routes around every snapshot check, and
+ * touches only the excluded_session table and the purge of prior rows.
  */
 
 import { upsertSession } from "./upsert.js";
+import { isExcluded, liftTombstone, tombstoneSession } from "./incognito.js";
 
-/** Supported contract version. @type {number} */
+/** Supported contract version for session snapshots. @type {number} */
 export const SCHEMA_VERSION = 2;
+
+/** Contract version for incognito tombstone requests. @type {number} */
+export const TOMBSTONE_SCHEMA_VERSION = 3;
 
 const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 const UUID = /^[0-9a-fA-F-]{36}$/;
@@ -130,6 +138,8 @@ const EVENT_REQUIRED = ["entryId", "kind", "occurredAt", "costMicros", ...COST_C
 const EVENT_KINDS = new Set(["assistant", "tool_result", "usage", "compaction", "branch_summary"]);
 const REPORTERS = new Set(["command", "agent_settled", "shutdown"]);
 
+const TOMBSTONE_KEYS = new Set(["schemaVersion", "sessionId", "incognito"]);
+
 /**
  * The field lists this validator enforces.
  *
@@ -140,7 +150,8 @@ const REPORTERS = new Set(["command", "agent_settled", "shutdown"]);
  * @type {{
  *   topLevel: Set<string>, topLevelRequired: string[],
  *   totals: Set<string>, totalsRequired: string[],
- *   events: Set<string>, eventsRequired: string[]
+ *   events: Set<string>, eventsRequired: string[],
+ *   tombstone: Set<string>, tombstoneRequired: string[]
  * }}
  */
 export const CONTRACT_KEYS = {
@@ -150,6 +161,8 @@ export const CONTRACT_KEYS = {
   totalsRequired: TOTAL_REQUIRED,
   events: EVENT_KEYS,
   eventsRequired: EVENT_REQUIRED,
+  tombstone: TOMBSTONE_KEYS,
+  tombstoneRequired: ["schemaVersion", "sessionId", "incognito"],
 };
 
 /**
@@ -370,22 +383,92 @@ export const payloadToRecord = (payload) => ({
 });
 
 /**
+ * Validate an incognito tombstone request (schema version 3).
+ *
+ * A tombstone carries a session UUID and a boolean, nothing else: `incognito: true`
+ * records the tombstone and purges any rows already stored for that id, `incognito: false`
+ * lifts it so the id may be reported again.
+ *
+ * @param {any} body Parsed request body
+ * @returns {{ ok: true, payload: any } | { ok: false, status: number, error: string, field?: string, reason?: string }}
+ */
+export const validateTombstonePayload = (body) => {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, status: 400, error: "invalid_payload", reason: "body must be a JSON object" };
+  }
+
+  for (const key of Object.keys(body)) {
+    if (!TOMBSTONE_KEYS.has(key)) {
+      return { ok: false, status: 400, error: "unknown_field", field: key };
+    }
+  }
+
+  if (body.schemaVersion !== TOMBSTONE_SCHEMA_VERSION) {
+    return {
+      ok: false,
+      status: 400,
+      error: "unsupported_schema_version",
+      received: body.schemaVersion ?? null,
+      supported: TOMBSTONE_SCHEMA_VERSION,
+    };
+  }
+  if (!UUID.test(body.sessionId)) return reject("sessionId", "must be a UUID");
+  if (typeof body.incognito !== "boolean") return reject("incognito", "must be a boolean");
+
+  return { ok: true, payload: body };
+};
+
+/**
+ * Apply a validated tombstone request.
+ *
+ * @param {import("better-sqlite3").Database} db
+ * @param {any} body Parsed request body
+ * @returns {{ status: number, body: object }} HTTP status and response body
+ */
+export const ingestTombstone = (db, body) => {
+  const validated = validateTombstonePayload(body);
+  if (!validated.ok) return { status: validated.status, body: validated };
+
+  const { sessionId, incognito } = validated.payload;
+  const { purged } = incognito ? tombstoneSession(db, sessionId) : { purged: liftTombstone(db, sessionId) };
+
+  return {
+    status: 200,
+    body: { ok: true, sessionId, incognito, purged },
+  };
+};
+
+/**
  * Validate a payload and store it.
  *
  * A rejected update is a normal outcome, not an error: it means a fresher snapshot is
  * already stored, and the stale one is discarded. The response says so with applied:
- * false, so the extension does not retry in a loop.
+ * false, so the extension does not retry in a loop. A schema-version-3 body routes to
+ * the tombstone path instead of the snapshot path.
  *
  * @param {import("better-sqlite3").Database} db
  * @param {any} body Parsed request body
  * @returns {{ status: number, body: object }} HTTP status and response body
  */
 export const ingestSession = (db, body) => {
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && body.schemaVersion === TOMBSTONE_SCHEMA_VERSION) {
+    return ingestTombstone(db, body);
+  }
+
   const validated = validateIngestPayload(body);
   if (!validated.ok) return { status: validated.status, body: validated };
 
   const { session, events } = payloadToRecord(validated.payload);
   const applied = upsertSession(db, session, events, "push");
+
+  // A refused write on a tombstoned id is incognito, not staleness. Say so, so a
+  // non-incognito extension version pushing to a tombstoned session logs the real reason.
+  if (!applied && isExcluded(db, session.sessionId)) {
+    return {
+      status: 409,
+      body: { ok: false, error: "incognito", sessionId: session.sessionId },
+    };
+  }
 
   return {
     status: applied ? 201 : 200,
