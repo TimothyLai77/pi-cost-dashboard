@@ -18,7 +18,7 @@ import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 
 import { aggregateSession } from "../scanner/aggregate.js";
-import { validateIngestPayload } from "../ingest.js";
+import { validateIngestPayload, validateTombstonePayload } from "../ingest.js";
 import { createApp } from "../index.js";
 import { migrateUp, openDatabase } from "../db.js";
 
@@ -26,6 +26,7 @@ const extensionPath = join(import.meta.dirname, "..", "..", "..", "pi-extension"
 const {
   buildPayload,
   buildSnapshot,
+  buildTombstonePayload,
   clearSettings,
   effectiveConfig,
   maskSecret,
@@ -648,4 +649,68 @@ test("the test action reports an unreachable endpoint as an error", async () => 
 
   assert.equal(notices.at(-1).level, "error");
   assert.ok(notices.at(-1).message.includes("Not reachable"));
+});
+
+test("the server accepts the extension's tombstone payload", () => {
+  const snapshot = buildSnapshot(fakeSessionManager("full-usage.jsonl"));
+  const payload = buildTombstonePayload(snapshot.sessionId, true);
+
+  assert.equal(payload.schemaVersion, 3);
+  assert.deepEqual(Object.keys(payload).sort(), ["incognito", "schemaVersion", "sessionId"]);
+
+  const result = validateTombstonePayload(payload);
+  assert.equal(result.ok, true, result.reason ?? "");
+});
+
+test("incognitoDefault: saved setting wins over environment, environment over default", () => {
+  const url = "https://host.example/api/ingest";
+
+  const fromEnv = effectiveConfig({ url }, { PI_COST_INCOGNITO: "1" });
+  assert.equal(fromEnv.incognitoDefault, true, "PI_COST_INCOGNITO=1 seeds new sessions incognito");
+
+  const plain = effectiveConfig({ url }, {});
+  assert.equal(plain.incognitoDefault, false, "default is visible sessions");
+
+  const savedFalse = effectiveConfig({ url, incognitoByDefault: false }, { PI_COST_INCOGNITO: "1" });
+  assert.equal(savedFalse.incognitoDefault, false, "the saved choice beats the environment");
+
+  const savedTrue = effectiveConfig({ url, incognitoByDefault: true }, {});
+  assert.equal(savedTrue.incognitoDefault, true, "and so does a saved true");
+});
+
+test("a tombstone round trip against the real app purges, blocks, and lifts", async () => {
+  const { url, stop } = await startAppServer("incognito-token");
+  const snapshot = buildSnapshot(fakeSessionManager("full-usage.jsonl"));
+  const headers = { "content-type": "application/json", "x-pi-cost-token": "incognito-token" };
+
+  const send = async (body) => {
+    const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    return { status: response.status, body: await response.json() };
+  };
+
+  try {
+    // The session reports, then goes incognito mid-session.
+    const reported = await send(buildPayload(snapshot, "agent_settled"));
+    assert.equal(reported.status, 201);
+
+    const tombstoned = await send(buildTombstonePayload(snapshot.sessionId, true));
+    assert.equal(tombstoned.status, 200);
+    assert.equal(tombstoned.body.purged, 1, "the stored rows are removed");
+
+    // Later reports of the same session are refused as incognito, not stale.
+    const blocked = await send(buildPayload(snapshot, "shutdown"));
+    assert.equal(blocked.status, 409);
+    assert.equal(blocked.body.error, "incognito");
+
+    // Lifting the tombstone lets the same snapshot land again.
+    const lifted = await send(buildTombstonePayload(snapshot.sessionId, false));
+    assert.equal(lifted.status, 200);
+    assert.equal(lifted.body.incognito, false);
+
+    const resumed = await send(buildPayload(snapshot, "agent_settled"));
+    assert.equal(resumed.status, 201);
+    assert.equal(resumed.body.applied, true);
+  } finally {
+    await stop();
+  }
 });

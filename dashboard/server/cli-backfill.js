@@ -55,10 +55,11 @@ const result = scanSessions(sessionsDir, db, { force: args.includes("--force") }
 
 console.log(
   `scan          ${result.scanned} parsed, ${result.skipped} unchanged, ${result.updated} written, ` +
-    `${result.deleted} deleted, ${result.rejected} rejected, ${result.ms} ms`,
+    `${result.deleted} deleted, ${result.rejected} rejected, ${result.tombstoned} incognito, ${result.ms} ms`,
 );
 if (result.skippedLines > 0) console.log(`notice        ${result.skippedLines} unparseable line(s) skipped`);
 if (result.rejected > 0) console.log(`notice        ${result.rejected} file(s) had no session header`);
+if (result.tombstoned > 0) console.log(`notice        ${result.tombstoned} file(s) blocked by an incognito tombstone`);
 
 const totals = db
   .prepare(

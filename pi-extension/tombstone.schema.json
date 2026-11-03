@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/TimothyLai77/pi-cost-dashboard/pi-cost-ingest-v3-tombstone",
+  "title": "Pi cost incognito tombstone",
+  "description": "Payload the Pi extension POSTs to /api/ingest to toggle incognito mode for one session. It carries the session UUID and a boolean, nothing else — no cost, no cwd, no timing for the session. incognito: true records the tombstone, purges any rows already stored for that id, and blocks all future writes for it; incognito: false lifts the tombstone so the session may be reported again. The server rejects unknown keys.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sessionId", "incognito"],
+  "properties": {
+    "schemaVersion": {
+      "const": 3,
+      "description": "Contract version. 3 is the tombstone shape; snapshots stay on 2."
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]{36}$",
+      "description": "Pi session UUID from the session header."
+    },
+    "incognito": {
+      "type": "boolean",
+      "description": "true to tombstone (and purge), false to lift the tombstone."
+    }
+  }
+}
