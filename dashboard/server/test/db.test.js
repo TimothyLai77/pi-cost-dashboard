@@ -74,11 +74,27 @@ test("migration down rolls back the newest migration only", () => {
   assert.ok(remaining.includes("idx_sessions_parent"), "002's index survives");
   assert.ok(remaining.includes("daily_cost"), "the views rebuilt by 003's rollback survive");
 
-  // The newest migration's columns are the ones that went away.
-  const sessionColumns = db.prepare("PRAGMA table_info(sessions)").all().map((column) => column.name);
-  const factColumns = db.prepare("PRAGMA table_info(usage_events)").all().map((column) => column.name);
-  assert.equal(sessionColumns.includes("cost_input_micros"), false, "003's session columns are gone");
-  assert.equal(factColumns.includes("cost_cache_read_micros"), false, "003's fact columns are gone");
+  // The newest migration (004 incognito) is the one that went away.
+  assert.equal(remaining.includes("excluded_session"), false, "004's tombstone table is gone");
+
+  db.close();
+});
+test("migration 004 creates the tombstone table, keyed by session id", () => {
+  const db = migratedDb();
+
+  const columns = db.prepare("PRAGMA table_info(excluded_session)").all().map((column) => column.name);
+  assert.deepEqual(columns, ["session_id", "created_at"]);
+
+  db.prepare("INSERT INTO excluded_session (session_id) VALUES (?)").run("session-uuid-a");
+  assert.throws(
+    () => db.prepare("INSERT INTO excluded_session (session_id) VALUES (?)").run("session-uuid-a"),
+    "the primary key rejects a duplicate tombstone",
+  );
+
+  // A tombstone stores nothing but the id and its own creation time.
+  const row = db.prepare("SELECT * FROM excluded_session").get();
+  assert.equal(row.session_id, "session-uuid-a");
+  assert.match(row.created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
 
   db.close();
 });
