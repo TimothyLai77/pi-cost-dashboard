@@ -16,7 +16,7 @@ npm run verify       # check the database against the files, exits non-zero on m
 npm run dev          # Express on 4870 + vite on 5173 (proxies /api)
 npm run build        # bundle web/ into web/dist
 npm start            # serve API and built app from 4870
-npm test             # 183 tests
+npm test             # 201 tests
 ```
 
 Opening `http://127.0.0.1:4870` after `npm run build && npm start` serves the app and
@@ -108,6 +108,7 @@ dashboard/
 │   ├── index.js            # express app; createApp() is exported for tests
 │   ├── db.js               # better-sqlite3 handle + migration runner
 │   ├── upsert.js           # guarded session upsert, shared by scan and ingest
+│   ├── incognito.js        # tombstone guard: isExcluded, purge, tombstone, lift
 │   ├── queries.js          # summary, daily, sessions, models, flows, lifetime stats, health
 │   ├── migrations/         # numbered .sql with .down.sql partners
 │   ├── scanner/
@@ -171,7 +172,7 @@ a token, so `/favicon.svg` resolves on a bare page load.
 | `GET` | `/api/health` | counts, schema version, last scan |
 | `GET` | `/api/config` | zone the server buckets in, its offset label, and where the setting came from |
 | `POST` | `/api/rescan` | force a full rescan |
-| `POST` | `/api/ingest` | extension report: validated, provisional, idempotent |
+| `POST` | `/api/ingest` | extension report: validated, provisional, idempotent; a version-3 body is an incognito tombstone (see below) |
 
 Money is integer micro-US dollars (`costMicros`) plus a formatted `costUsd` string.
 Reads are open; the two POST routes require `x-pi-cost-token` when `PI_COST_TOKEN` is
@@ -240,6 +241,21 @@ project. The **Tokens** button re-sizes every band in tokens, which is a differe
 the model that moved 746M tokens on this machine billed $0.00, so the money view does not
 draw it at all and the token view draws it as the widest node on the page.
 
+## Incognito mode
+
+`/pi-cost-incognito on` in Pi makes a session invisible end to end. The server half lives
+here: a version-3 tombstone (`{ sessionId, incognito }`) records the UUID in
+`excluded_session`, deletes any rows the session already pushed, and blocks every later
+write — `upsertSession` is the single choke point shared by ingest and the scanner, so a
+tombstoned UUID cannot land from pushes, backfill, or warm scans. A v2 push to a
+tombstoned UUID answers 409 `incognito`, not the misleading `stale_snapshot`. The scanner
+marks tombstoned files in `scan_state` so warm scans skip them instead of re-parsing, and
+`npm run backfill` prints the blocked count.
+
+A tombstone stores the UUID and its own creation time: no cost, no cwd, no timing for the
+session itself. Lifting it (`incognito: false`) removes the row and lets the UUID be
+written again.
+
 ## Timezone
 
 `PI_COST_TZ` sets the zone the dashboard buckets in: the day bars, the 24 hour labels in
@@ -264,6 +280,7 @@ shows the same answer.
 | `sessions` | one row per Pi session | rollups, project, name, counts |
 | `usage_events` | one row per usage-bearing entry | a session spanning midnight bills the days it ran on |
 | `scan_state` | one row per session file | `(mtime, size)` cache; unchanged files are skipped |
+| `excluded_session` | one row per incognito session | tombstone: session UUID + creation time, nothing else |
 
 `daily_cost` and `model_cost` are views over `usage_events`, so rollups cannot drift out
 of sync with the facts. `npm run verify` checks row counts, grand total cost, grand total

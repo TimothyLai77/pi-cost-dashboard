@@ -19,7 +19,7 @@ Develop against one session without installing: `pi --extension ./pi-cost.ts`
 `/pi-cost-settings` saves to `~/.pi/agent/extensions/pi-cost.json` at mode 0600:
 
 ```json
-{ "url": "https://pi-cost.example.net/api/ingest", "token": "…", "auto": true }
+{ "url": "https://pi-cost.example.net/api/ingest", "token": "…", "auto": true, "incognitoByDefault": false }
 ```
 
 Saved settings win. An environment variable applies only to a key the file does not set, so
@@ -49,6 +49,9 @@ logged to `~/.pi/agent/extensions/pi-cost.log`.
 | `/pi-cost total` | All-time spend from the server |
 | `/pi-cost today` / `/pi-cost week` | Server totals for a window |
 | `/pi-cost off` / `/pi-cost on` | Stop / resume automatic reporting for this session |
+| `/pi-cost-incognito on` | This session reports nothing; the server tombstones and purges it |
+| `/pi-cost-incognito off` | Lift the tombstone; reports resume |
+| `/pi-cost-incognito` / `status` | Show this session's incognito state |
 | `/pi-cost-settings` | Menu: show, endpoint URL, report token, auto on/off, test connection, clear |
 | `/pi-cost-settings url\|token\|auto\|test\|show\|clear` | Skip the menu, go straight there |
 
@@ -74,6 +77,31 @@ protect, and in a deployment that scans session files the scanner picks its sess
 seconds later. In a push-fed deployment — the container scans nothing — the report at
 session exit is what puts a print-mode session on the dashboard, so run it with
 `PI_COST_URL` set.
+
+## Incognito mode
+
+`/pi-cost-incognito on` makes the current session invisible to the dashboard:
+
+- Reports stop immediately — settled, shutdown, and manual `/pi-cost` all skip it.
+- The extension POSTs a **tombstone** (`tombstone.schema.json`, version 3: session UUID
+  and a boolean, no cost, no cwd, no timing). The server records it, deletes any rows
+  the session already pushed, and refuses every later write for that UUID — from
+  pushes *and* from any scan.
+- `/pi-cost-incognito off` lifts the tombstone. Reports resume, and because snapshots are
+  cumulative, the incognito window's spend appears with the next report.
+
+Tombstone sends retry three times with backoff (0/2/5 s) and failures are logged to
+`pi-cost.log` and shown in the UI. The retry exists because the failure modes are not
+symmetric: a lost cost report loses a number, a lost tombstone leaves the session visible
+to every later writer. If the tombstone fails, incognito is active in this Pi process —
+no reports leave — but re-run `/pi-cost-incognito on` once the server is reachable.
+
+To start every new session incognito, save `"incognitoByDefault": true` in the settings
+file or export `PI_COST_INCOGNITO=1`; the command overrides the seed per session. The
+two limits, by design: with the extension unloaded there is nothing to tombstone, so the
+session is visible as usual; and the toggle is per session — resuming an incognito
+session in a new Pi process re-seeds from the default, so lift it with
+`/pi-cost-incognito off` if you want it visible again.
 
 ## The two constraints that shaped this
 
@@ -109,9 +137,13 @@ from real fixtures and requires the server's validator to accept them.
 Version 2 added the four parts of every bill — `costInputMicros`, `costOutputMicros`,
 `costCacheReadMicros`, `costCacheWriteMicros` — on each event and in `totals`. Pi's pricing
 pass writes those four next to the total in every usage block, so the extension reads them
-rather than computing them. The server accepts version 2 only, so the extension and the
+rather than computing them. The server accepts version 2 snapshots, so the extension and the
 server deploy together: a Pi running the older extension gets
 `unsupported_schema_version` back and stops self-reporting until it is reloaded.
+
+`tombstone.schema.json` is version 3: the incognito toggle, a second payload shape on the
+same endpoint — `{ schemaVersion: 3, sessionId, incognito }`. Snapshots stay on 2, so
+tombstones carry no new contract surface for report payloads.
 
 ## Files
 
@@ -119,4 +151,5 @@ server deploy together: a Pi running the older extension gets
 |---|---|
 | `pi-cost.ts` | The extension |
 | `payload.schema.json` | Ingest contract, shared with the server |
+| `tombstone.schema.json` | Incognito tombstone contract, version 3 |
 | `tsconfig.json` | Type-check against Pi's real declarations: `/home/user/node_modules/.bin/tsc -p tsconfig.json` |
