@@ -66,6 +66,9 @@ const MICRO_DOLLARS_PER_DOLLAR = 1e6;
 /** Payload contract version, matching pi-extension/payload.schema.json. */
 const SCHEMA_VERSION = 2;
 
+/** Tombstone contract version, matching pi-extension/tombstone.schema.json. */
+export const TOMBSTONE_SCHEMA_VERSION = 3;
+
 /** Usage kinds, matching the server contract. */
 type UsageKind = "assistant" | "tool_result" | "usage" | "compaction" | "branch_summary";
 
@@ -105,6 +108,8 @@ interface SessionSnapshot {
 interface Config {
   url: string;
   autoEnabled: boolean;
+  /** New sessions start incognito unless /pi-cost-incognito overrides them. */
+  incognitoDefault: boolean;
   timeoutMs: number;
   minIntervalMs: number;
   shutdownTimeoutMs: number;
@@ -123,6 +128,7 @@ export interface SavedSettings {
   url?: string;
   token?: string;
   auto?: boolean;
+  incognitoByDefault?: boolean;
 }
 
 /** Default path for saved settings, next to the extension's log file. @type {string} */
@@ -146,6 +152,7 @@ export const readSettings = (file: string = SETTINGS_FILE): SavedSettings | null
     if (typeof raw.url === "string") saved.url = raw.url;
     if (typeof raw.token === "string") saved.token = raw.token;
     if (typeof raw.auto === "boolean") saved.auto = raw.auto;
+    if (typeof raw.incognitoByDefault === "boolean") saved.incognitoByDefault = raw.incognitoByDefault;
     return saved;
   } catch {
     return null;
@@ -217,10 +224,15 @@ export const effectiveConfig = (
 
   const token = saved && "token" in saved ? saved.token : env.PI_COST_TOKEN;
   const auto = saved && typeof saved.auto === "boolean" ? saved.auto : env.PI_COST_AUTO !== "0";
+  const incognitoDefault =
+    saved && typeof saved.incognitoByDefault === "boolean"
+      ? saved.incognitoByDefault
+      : env.PI_COST_INCOGNITO === "1";
 
   return {
     url,
     autoEnabled: auto,
+    incognitoDefault,
     timeoutMs: number("PI_COST_TIMEOUT_MS", 5000),
     minIntervalMs: number("PI_COST_MIN_INTERVAL_MS", 10000),
     shutdownTimeoutMs: number("PI_COST_SHUTDOWN_TIMEOUT_MS", 2000),
@@ -476,6 +488,21 @@ export const buildPayload = (snapshot: SessionSnapshot, reportedBy: "command" | 
   events: snapshot.facts,
   reportedBy,
   reportedAt: new Date().toISOString(),
+});
+
+/**
+ * Build the incognito tombstone payload for one toggle.
+ *
+ * Exported so a test can send its output through the server's tombstone validator.
+ *
+ * @param {string} sessionId Pi session UUID
+ * @param {boolean} incognito true to tombstone (and purge), false to lift
+ * @returns {object} Body matching tombstone.schema.json v3
+ */
+export const buildTombstonePayload = (sessionId: string, incognito: boolean) => ({
+  schemaVersion: TOMBSTONE_SCHEMA_VERSION,
+  sessionId,
+  incognito,
 });
 
 /**
@@ -861,6 +888,70 @@ export default function (pi: ExtensionAPI) {
   let lastReportMs = 0;
   let inFlight: Promise<void> | null = null;
 
+  // Incognito mode, keyed by session UUID. The server's tombstone is the durable record;
+  // this set is the live view that suppresses reports in the current Pi process. A
+  // resumed session re-seeds from incognitoDefault, and /pi-cost-incognito overrides the
+  // seed for the sessions it is run in.
+  const incognitoSessions = new Set<string>();
+  const seenSessions = new Set<string>();
+
+  /**
+   * Pause without keeping the process alive — the timer equivalent of the unref'd socket.
+   * @param {number} ms
+   * @returns {Promise<void>}
+   */
+  const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref();
+    });
+
+  /**
+   * Seed a first-seen session from the incognito default, tombstoning in the background.
+   * @param {Config} active
+   * @param {string} sessionId
+   * @returns {void}
+   */
+  const seedIncognitoDefault = (active: Config, sessionId: string): void => {
+    if (seenSessions.has(sessionId)) return;
+    seenSessions.add(sessionId);
+    if (!active.incognitoDefault) return;
+    incognitoSessions.add(sessionId);
+    // Fire-and-forget: seeding runs inside report handlers that must not await network.
+    void postTombstone(active, sessionId, true);
+  };
+
+  /**
+   * Send a tombstone, retrying the send because a lost tombstone is a privacy leak.
+   *
+   * A lost cost report only loses a number; a lost tombstone leaves an incognito session
+   * visible to every later writer, so this request gets three attempts with backoff,
+   * and every failure is logged.
+   *
+   * @param {Config} active
+   * @param {string} sessionId
+   * @param {boolean} incognito
+   * @returns {Promise<{ ok: boolean, purged?: number, error?: string }}> never rejects
+   */
+  const postTombstone = async (
+    active: Config,
+    sessionId: string,
+    incognito: boolean,
+  ): Promise<{ ok: boolean; purged?: number; error?: string }> => {
+    const payload = buildTombstonePayload(sessionId, incognito);
+    for (const delayMs of [0, 2000, 5000]) {
+      if (delayMs > 0) await sleep(delayMs);
+      try {
+        const body = await post(active, payload, active.timeoutMs);
+        logLine(active, `tombstone ${incognito ? "set" : "lifted"} for ${sessionId}${body.purged ? `: purged ${body.purged}` : ""}`);
+        return { ok: true, purged: body.purged };
+      } catch (error) {
+        logLine(active, `tombstone ${incognito ? "set" : "lift"} failed for ${sessionId}: ${(error as Error).message}`);
+      }
+    }
+    return { ok: false, error: "the tombstone did not reach the server" };
+  };
+
   /**
    * Send a payload. Resolves with the parsed response, rejects on transport failure.
    * @param {Config} active Configuration to send under
@@ -941,6 +1032,11 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("No session id available to report.", "error");
         return;
       }
+      seedIncognitoDefault(active, snapshot.sessionId);
+      if (incognitoSessions.has(snapshot.sessionId)) {
+        ctx.ui.notify("This session is incognito; /pi-cost does not report it. /pi-cost-incognito off lifts the tombstone.", "info");
+        return;
+      }
       if (snapshot.costMicros === 0 && snapshot.totalTokens === 0) {
         ctx.ui.notify("Nothing to report yet: this session has used no tokens.", "info");
         return;
@@ -961,6 +1057,70 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("pi-cost-incognito", {
+    description: "Toggle incognito mode: this session reports nothing and is purged server-side",
+    getArgumentCompletions: (prefix: string) => {
+      const names = ["on", "off", "status"];
+      const matches = names.filter((name) => name.startsWith(prefix));
+      return matches.length > 0 ? matches.map((name) => ({ value: name, label: name })) : null;
+    },
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (!sessionId) {
+        ctx.ui.notify("No session id available to tombstone.", "error");
+        return;
+      }
+
+      const word = (args ?? "").trim().split(/\s+/)[0]?.toLowerCase() ?? "status";
+      const on = word === "on" ? true : word === "off" ? false : null;
+
+      // No argument (or "status"): report the state, change nothing.
+      if (on === null) {
+        const state = incognitoSessions.has(sessionId);
+        ctx.ui.notify(
+          state
+            ? "This session is incognito: nothing is reported for it. /pi-cost-incognito off to lift."
+            : "This session is not incognito. /pi-cost-incognito on to start.",
+          "info",
+        );
+        return;
+      }
+
+      // Suppress locally first: reports stop even if the server is unreachable.
+      if (on) incognitoSessions.add(sessionId);
+      else incognitoSessions.delete(sessionId);
+      seenSessions.add(sessionId);
+
+      const active = config;
+      if (!active) {
+        ctx.ui.notify(
+          on
+            ? "This session is incognito for this Pi process. No endpoint is configured, so no tombstone was sent."
+            : "Incognito off for this Pi process. No endpoint is configured, so no tombstone was lifted.",
+          "info",
+        );
+        return;
+      }
+
+      const result = await postTombstone(active, sessionId, on);
+      if (!result.ok) {
+        ctx.ui.notify(
+          on
+            ? "This session is incognito in Pi, and reports are stopped. But the tombstone did not reach the server — while Pi is not reporting, a scan of this machine's session files could still ingest it. Run /pi-cost-incognito on again once the server is reachable."
+            : "Incognito is off in Pi, but the server's tombstone is still in place and will refuse this session's reports. Run /pi-cost-incognito off again once the server is reachable.",
+          "warning",
+        );
+        return;
+      }
+      ctx.ui.notify(
+        on
+          ? `This session is incognito: reporting stopped${result.purged ? ` and ${result.purged} stored session(s) removed from the dashboard` : ""}.`
+          : "Tombstone lifted, reports resume. Spend from the incognito window appears once snapshots resume.",
+        "info",
+      );
+    },
+  });
+
   pi.on("agent_settled", async (_event, ctx) => {
     const active = config;
     if (!active || !active.autoEnabled || disabledForSession) return;
@@ -974,6 +1134,8 @@ export default function (pi: ExtensionAPI) {
     try {
       const snapshot = buildSnapshot(ctx.sessionManager);
       if (!snapshot) return;
+      seedIncognitoDefault(active, snapshot.sessionId);
+      if (incognitoSessions.has(snapshot.sessionId)) return;
       // A session with no usage has nothing to report; skip it silently.
       if (snapshot.costMicros === 0 && snapshot.totalTokens === 0) return;
       payload = buildPayload(snapshot, "agent_settled");
@@ -1001,6 +1163,8 @@ export default function (pi: ExtensionAPI) {
     try {
       const snapshot = buildSnapshot(ctx.sessionManager);
       if (!snapshot) return;
+      seedIncognitoDefault(active, snapshot.sessionId);
+      if (incognitoSessions.has(snapshot.sessionId)) return;
       if (snapshot.costMicros === 0 && snapshot.totalTokens === 0) return;
 
       // Awaiting here is required: process exit kills in-flight requests. Nothing is
