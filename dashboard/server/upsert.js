@@ -9,7 +9,10 @@
  *     `entry_count`. Without that guard an out-of-order push could lower a total.
  *   - Facts are replaced wholesale inside the same transaction, so ingest is idempotent
  *     and independent of arrival order.
+ *   - A session with an incognito tombstone is never written, by either writer.
  */
+
+import { isExcluded } from "./incognito.js";
 
 /**
  * Insert or update one session row and replace its usage facts.
@@ -21,9 +24,12 @@
  * @param {object[]} events Usage facts from aggregateSession, the complete set for the session
  * @param {"scan" | "push"} source Which writer is reporting
  * @returns {boolean} true when the row was written, false when a stale push was discarded
+ *   or the session carries an incognito tombstone
  */
 export const upsertSession = (db, session, events, source) => {
   if (!session.sessionId) return false;
+  // Incognito: a tombstoned id is refused from every writer, scan included.
+  if (isExcluded(db, session.sessionId)) return false;
 
   const write = db.transaction(() => {
     const result = db
