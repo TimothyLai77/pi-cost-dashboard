@@ -31,7 +31,7 @@ import {
   getSessions,
   getSummary,
   MAX_PAGE_SIZE,
-} from "../queries.js";
+} from "../queries/index.js";
 import { createApp } from "../index.js";
 import { SCHEMA_VERSION } from "../ingest.js";
 

@@ -34,7 +34,7 @@ import {
   getSessions,
   getLifetimeStats,
   getSummary,
-} from "./queries.js";
+} from "./queries/index.js";
 import { isSupportedTimeZone, offsetLabel, utcOffsetMinutes } from "./timezone.js";
 import { resolveSessionsDir, scanSessions, scannerStatus } from "./scanner/scan.js";
 
