@@ -928,6 +928,41 @@ test("GET /api/daily rejects a malformed date", async () => {
   db.close();
 });
 
+test("GET /api rejects a well-formed date the calendar does not have", async () => {
+  const db = seededDb();
+  await withServer(db, async (base) => {
+    // These match the YYYY-MM-DD shape, so a shape check waves them through and they reach
+    // the timezone helpers as instants. There they either throw, which answers 500, or become
+    // a filter on a day that never happened, which answers 200 with an empty chart. Both are
+    // the wrong answer to a bad request.
+    const impossible = [
+      ["/api/daily?from=2026-13-45", "from"],
+      ["/api/daily?from=2026-02-31&to=2026-03-02", "from"],
+      ["/api/daily?to=2026-00-10", "to"],
+      ["/api/hourly?day=2026-02-31", "day"],
+      ["/api/flows?from=2026-02-31", "from"],
+      ["/api/flows?to=2026-13-45", "to"],
+    ];
+    for (const [path, parameter] of impossible) {
+      const response = await fetch(`${base}${path}`);
+      const body = await response.json();
+      assert.equal(response.status, 400, `${path} is a bad request, not a crash or an empty result`);
+      assert.equal(body.error, "invalid_parameter", `${path} names the parameter it disliked`);
+      assert.equal(body.parameter, parameter, `${path} names ${parameter}`);
+    }
+
+    // A day is rejected for not existing, not for being a day: 2024 was a leap year and
+    // 2025 was not, and only one of these two February 29ths is a request the API can honour.
+    const leapDay = await fetch(`${base}/api/daily?from=2024-02-28&to=2024-02-29`);
+    assert.equal(leapDay.status, 200, "2024-02-29 is a real day and stays a valid filter");
+
+    const notALeapDay = await fetch(`${base}/api/daily?from=2025-02-28&to=2025-02-29`);
+    assert.equal(notALeapDay.status, 400, "2025-02-29 is not");
+    assert.equal((await notALeapDay.json()).parameter, "to");
+  });
+  db.close();
+});
+
 test("GET /api/sessions rejects a non-numeric page and 404s an unknown session", async () => {
   const db = seededDb();
   await withServer(db, async (base) => {
