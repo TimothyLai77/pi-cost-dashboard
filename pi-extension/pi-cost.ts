@@ -538,11 +538,38 @@ export interface PostOutcome {
   applied: boolean;
   /**
    * Why it did not go through: the transport error when nobody answered, otherwise the
-   * server's own reason (`incognito`, `stored_row_conflict`, a validation message) when it
-   * sent one. Null on success.
+   * server's own reason (`incognito`, `stored_row_conflict`, a validation message with the
+   * field it names) when it sent one. Null on success.
    */
   error: string | null;
 }
+
+/**
+ * Turn a rejected response body into one readable line.
+ *
+ * The server answers a rejected payload with a machine code, the field it broke, and the rule:
+ * `{ error: "invalid_payload", field: "events[313].costMicros", reason: "..." }`. The code alone
+ * is what sent someone to reproduce a 422 by hand to learn which event was refused, so the
+ * detail rides along in the log line.
+ *
+ * Exported so a test can pin all three shapes.
+ *
+ * @param {Record<string, any>} body Parsed response body
+ * @param {string} fallback What to say when the body carries nothing readable
+ * @returns {string}
+ */
+export const describeRejection = (body: Record<string, any>, fallback: string): string => {
+  const code =
+    typeof body.error === "string" && body.error.length > 0
+      ? body.error
+      : typeof body.detail === "string" && body.detail.length > 0
+        ? body.detail
+        : fallback;
+  const where = typeof body.field === "string" && body.field.length > 0 ? `${body.field}: ` : "";
+  const why = typeof body.reason === "string" && body.reason.length > 0 ? body.reason : "";
+  const detail = `${where}${why}`.trim();
+  return detail.length > 0 ? `${code} — ${detail}` : code;
+};
 
 /**
  * Send a snapshot without blocking and without keeping the process alive.
@@ -611,12 +638,11 @@ export const postBackground = (config: Config, payload: object): Promise<PostOut
           // The server names its reason — an incognito tombstone, a row keyed under another
           // file path, a validation failure — and repeating it is what turns "3 sessions were
           // refused" into something the user can read without making a second request.
-          const serverReason = typeof parsed.error === "string" ? parsed.error : null;
           resolve({
             ok: succeeded,
             status,
             applied: parsed.applied !== false,
-            error: succeeded ? null : serverReason,
+            error: succeeded ? null : describeRejection(parsed, `HTTP ${status ?? "no response"}`),
           });
         });
       },
@@ -1189,9 +1215,10 @@ export default function (pi: ExtensionAPI) {
     const body = await response.json().catch(() => ({})) as Record<string, any>;
     if (!response.ok) {
       // The status rides along, because a caller has to tell "the server refused this report"
-      // from "the server was not there": only the second is worth queueing for later.
+      // from "the server was not there": only the second is worth queueing for later. The
+      // field and reason ride along too, so /pi-cost and a shutdown refusal name the problem.
       const failure = new Error(
-        `${response.status}: ${body.detail ?? body.error ?? response.statusText}`,
+        `${response.status}: ${describeRejection(body, response.statusText)}`,
       ) as ReportFailure;
       failure.status = response.status;
       throw failure;

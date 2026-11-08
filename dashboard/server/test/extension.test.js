@@ -41,6 +41,7 @@ const {
   buildSnapshot,
   buildTombstonePayload,
   clearSettings,
+  describeRejection,
   default: createExtension,
   effectiveConfig,
   maskSecret,
@@ -986,6 +987,44 @@ test("postBackground says what the server answered, so a failure can be kept", {
   assert.equal(tombstoned.ok, false);
   assert.equal(tombstoned.status, 409);
   assert.equal(tombstoned.error, "incognito");
+
+  // A rejected payload names the field and the rule beside its code. Getting only
+  // `invalid_payload` back is what turned a whole dropped session into a manual repro.
+  const rejected = await send(422, {
+    ok: false,
+    status: 422,
+    error: "invalid_payload",
+    field: "events[313].costMicros",
+    reason: "cost components must add up to costMicros (components sum to 0)",
+  });
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.status, 422);
+  assert.equal(
+    rejected.error,
+    "invalid_payload — events[313].costMicros: cost components must add up to costMicros (components sum to 0)",
+  );
+});
+
+test("describeRejection names the field and the rule, and says nothing it was not told", () => {
+  assert.equal(
+    describeRejection({ error: "invalid_payload", field: "events[0].costMicros", reason: "must be a non-negative integer" }, "Internal Server Error"),
+    "invalid_payload — events[0].costMicros: must be a non-negative integer",
+  );
+  assert.equal(
+    describeRejection({ error: "invalid_payload", reason: "body must be a JSON object" }, "Bad Request"),
+    "invalid_payload — body must be a JSON object",
+    "a reason with no field still reads",
+  );
+  assert.equal(
+    describeRejection({ error: "unauthorized" }, "Unauthorized"),
+    "unauthorized",
+    "no detail invented when the server sent only a code",
+  );
+  assert.equal(
+    describeRejection({}, "Bad Gateway"),
+    "Bad Gateway",
+    "a body that is not JSON at all falls back to what the transport knows",
+  );
 });
 
 test("a report nobody answered is worth retrying, one read and refused is not", async () => {
