@@ -536,6 +536,11 @@ export interface PostOutcome {
   status: number | null;
   /** False when the server said it already holds a fresher row. Still a success. */
   applied: boolean;
+  /**
+   * Why it did not go through: the transport error when nobody answered, otherwise the
+   * server's own reason (`incognito`, `stored_row_conflict`, a validation message) when it
+   * sent one. Null on success.
+   */
   error: string | null;
 }
 
@@ -592,9 +597,9 @@ export const postBackground = (config: Config, payload: object): Promise<PostOut
         });
         response.on("end", () => {
           const text = Buffer.concat(chunks).toString("utf8");
-          let answered: Record<string, any> = {};
+          let parsed: Record<string, any> = {};
           try {
-            answered = text ? (JSON.parse(text) as Record<string, any>) : {};
+            parsed = text ? (JSON.parse(text) as Record<string, any>) : {};
           } catch {
             // A proxy in front of the server answers a 502 with an HTML page, which is exactly
             // what this machine's log shows. The status is the answer: an unreadable body must
@@ -602,11 +607,16 @@ export const postBackground = (config: Config, payload: object): Promise<PostOut
             // later report is blocked behind it.
           }
           const status = response.statusCode ?? null;
+          const succeeded = status !== null && status >= 200 && status < 300;
+          // The server names its reason — an incognito tombstone, a row keyed under another
+          // file path, a validation failure — and repeating it is what turns "3 sessions were
+          // refused" into something the user can read without making a second request.
+          const serverReason = typeof parsed.error === "string" ? parsed.error : null;
           resolve({
-            ok: status !== null && status >= 200 && status < 300,
+            ok: succeeded,
             status,
-            applied: answered.applied !== false,
-            error: null,
+            applied: parsed.applied !== false,
+            error: succeeded ? null : serverReason,
           });
         });
       },
@@ -760,6 +770,23 @@ const keepForRetry = (config: Config, payload: Record<string, any>, status: numb
   for (const dropped of gaveUp) {
     logLine(config, `gave up on session ${dropped.sessionId} after ${dropped.attempts} attempts`);
   }
+};
+
+/**
+ * Remove one session's queued report.
+ *
+ * Re-reads first: another report may have been queued while a request was in flight, and
+ * overwriting from a stale list would resurrect it.
+ *
+ * @param {Config} config
+ * @param {string} sessionId
+ * @returns {void}
+ */
+const dropQueuedReport = (config: Config, sessionId: string): void => {
+  writePendingReports(
+    config.pendingFile,
+    readPendingReports(config.pendingFile).filter((entry) => entry.sessionId !== sessionId),
+  );
 };
 
 /**
@@ -1073,6 +1100,7 @@ export default function (pi: ExtensionAPI) {
   let disabledForSession = false;
   let lastReportMs = 0;
   let inFlight: Promise<void> | null = null;
+  let replaying = false;
 
   // Incognito mode, keyed by session UUID. The server's tombstone is the durable record;
   // this set is the live view that suppresses reports in the current Pi process. A
@@ -1313,6 +1341,60 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  /**
+   * Try one queued report, the least recently touched first, without blocking anyone.
+   *
+   * The attempt rides on a settle that is already happening rather than on a timer: Pi forbids
+   * timers in an extension, and a session that just settled is proof this machine is alive
+   * again. Called only from the path that would have reported anyway, so the ten-second report
+   * throttle paces the retries too — five attempts then spread over roughly a quarter of an hour
+   * of prompting instead of burning out inside two minutes of a 502.
+   *
+   * Deliberately not attempted at shutdown: awaiting it there is the exit hang this file exists
+   * to avoid, and firing it unawaited is pointless because Pi's exit kills the request. The
+   * queue outlives the process, so the next session picks it up.
+   *
+   * @param {Config} active
+   * @returns {void}
+   */
+  const replayQueuedReport = (active: Config, reportingSessionId: string): void => {
+    if (replaying) return;
+
+    const queued = readPendingReports(active.pendingFile);
+    for (const entry of queued.filter((candidate) => incognitoSessions.has(candidate.sessionId))) {
+      // Numbers the user asked to keep off the dashboard do not go out just because they were
+      // queued before the toggle. Drop them rather than let them block the head of the queue.
+      dropQueuedReport(active, entry.sessionId);
+      logLine(active, `dropped the queued report for incognito session ${entry.sessionId}`);
+    }
+
+    // The session that is reporting right now owns its own queue entry: the live report above
+    // has just counted its attempt. Replaying it in the same settle would spend two of its five
+    // attempts at once, and the fresher snapshot is already on its way.
+    const next = queued.find(
+      (entry) => !incognitoSessions.has(entry.sessionId) && entry.sessionId !== reportingSessionId,
+    );
+    if (!next) return;
+
+    replaying = true;
+    void postBackground(active, next.payload).then((outcome) => {
+      replaying = false;
+      if (outcome.ok) {
+        dropQueuedReport(active, next.sessionId);
+        logLine(active, `recovered session ${next.sessionId} after ${next.attempts} attempt(s)`);
+        return;
+      }
+
+      logLine(active, `replay of session ${next.sessionId} failed: ${outcome.error ?? `HTTP ${outcome.status}`}`);
+      if (worthRetrying(outcome.status)) {
+        // The entry is still queued, so this bumps its attempt count and retires it at the limit.
+        keepForRetry(active, next.payload, outcome.status);
+      } else {
+        dropQueuedReport(active, next.sessionId);
+      }
+    });
+  };
+
   pi.on("agent_settled", async (_event, ctx) => {
     const active = config;
     if (!active || !active.autoEnabled || disabledForSession) return;
@@ -1350,6 +1432,10 @@ export default function (pi: ExtensionAPI) {
       logLine(active, `settled report failed: ${outcome.error ?? `HTTP ${outcome.status}`}`);
       keepForRetry(active, payload as Record<string, any>, outcome.status);
     });
+
+    // A settle is also the cheapest proof the server might answer this time, so it is when the
+    // queue gets its turn. Behind the report throttle on purpose, so retries stay paced.
+    replayQueuedReport(active, (payload as Record<string, any>).sessionId);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

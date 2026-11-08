@@ -11,9 +11,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 
@@ -23,6 +24,7 @@ import { createApp } from "../index.js";
 import { migrateUp, openDatabase } from "../db.js";
 
 const extensionPath = join(import.meta.dirname, "..", "..", "..", "pi-extension", "pi-cost.ts");
+const cliPushPath = join(import.meta.dirname, "..", "..", "..", "pi-extension", "cli-push.ts");
 
 // The extension reads its endpoint, its token, and its log path out of the real Pi directory,
 // resolved from the home directory when the module loads. Point HOME at an empty temporary one
@@ -883,15 +885,24 @@ const until = async (check, timeoutMs = 3000) => {
 };
 
 /**
- * A server that answers every request with a fixed status and body.
+ * A server that answers every request with a fixed status and body, and records what it was asked
+ * so a test can tell which reports actually arrived.
  * @param {number} status
  * @param {string | object} body
- * @returns {Promise<{ url: string, stop: () => Promise<void> }>}
+ * @returns {Promise<{ url: string, requests: any[], stop: () => Promise<void> }>}
  */
 const startAnsweringServer = async (status, body) => {
+  /** @type {any[]} */
+  const requests = [];
   const server = createHttpServer((req, res) => {
-    req.resume();
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
+      try {
+        requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        requests.push(null);
+      }
       res.writeHead(status, { "content-type": "application/json" });
       res.end(typeof body === "string" ? body : JSON.stringify(body));
     });
@@ -899,6 +910,7 @@ const startAnsweringServer = async (status, body) => {
   await new Promise((boot) => server.listen(0, "127.0.0.1", boot));
   return {
     url: `http://127.0.0.1:${server.address().port}/api/ingest`,
+    requests,
     stop: () => new Promise((done) => server.close(done)),
   };
 };
@@ -962,6 +974,18 @@ test("postBackground says what the server answered, so a failure can be kept", {
   const refused = await send(400, { error: "entryCount must be a number" });
   assert.equal(refused.ok, false);
   assert.equal(refused.status, 400);
+  assert.equal(
+    refused.error,
+    "entryCount must be a number",
+    "the server's reason survives, so a log line can repeat it instead of a bare status",
+  );
+
+  // A tombstoned session is refused with 409 `incognito`. Losing that word is how a correct
+  // refusal ends up looking like a broken endpoint.
+  const tombstoned = await send(409, { ok: false, error: "incognito", sessionId: "session-under-test" });
+  assert.equal(tombstoned.ok, false);
+  assert.equal(tombstoned.status, 409);
+  assert.equal(tombstoned.error, "incognito");
 });
 
 test("a report nobody answered is worth retrying, one read and refused is not", async () => {
@@ -973,6 +997,7 @@ test("a report nobody answered is worth retrying, one read and refused is not", 
   assert.equal(worthRetrying(null), true);
   assert.equal(worthRetrying(502), true, "a server having a bad day may recover");
   assert.equal(worthRetrying(400), false, "the same bytes get the same answer");
+  assert.equal(worthRetrying(409), false, "an incognito or conflicting row will not change its mind");
 });
 
 test("the queue keeps one entry per session, counts attempts, and then gives up", () => {
@@ -1078,4 +1103,167 @@ test("a report the server read and refused is not queued", async () => {
       await stop();
     }
   });
+});
+
+// Bounded so a replay that never fires fails with a message instead of hanging the file.
+test("a queued report goes out on a later settle and leaves the queue", { timeout: 20000 }, async () => {
+  const deadUrl = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+  const recovered = await startAnsweringServer(201, { ok: true, applied: true });
+
+  try {
+    await withReportEnv({ PI_COST_URL: deadUrl, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+      await withTempHome(async (home) => {
+        const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+        const handlers = installExtension();
+
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+        assert.ok(await until(() => existsSync(pendingFile)), "the first session's report is queued");
+
+        // The endpoint comes back, and a later session settles. A later session is a fresh
+        // install in reality — Pi builds the extension per process — and the queue file on disk
+        // is what carries the report between them. Its own report goes out as usual; the queued
+        // one rides along on the same settle rather than waiting for a restart nobody is going
+        // to do just to sync numbers.
+        process.env.PI_COST_URL = recovered.url;
+        const laterHandlers = installExtension();
+        await laterHandlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("usage-only.jsonl"),
+        });
+
+        assert.ok(await until(() => !existsSync(pendingFile)), "the recovered report leaves the queue");
+        const queuedSessionId = buildSnapshot(fakeSessionManager("full-usage.jsonl")).sessionId;
+        assert.ok(
+          recovered.requests.map((request) => request.sessionId).includes(queuedSessionId),
+          `the queued report should have reached the server, got ${JSON.stringify(recovered.requests.map((r) => r.sessionId))}`,
+        );
+      });
+    });
+  } finally {
+    await recovered.stop();
+  }
+});
+
+test("a queued report the server read and refused is dropped, not retried", { timeout: 20000 }, async () => {
+  const deadUrl = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+  const refusing = await startAnsweringServer(400, { error: "entryCount must be a number" });
+
+  try {
+    await withReportEnv({ PI_COST_URL: deadUrl, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+      await withTempHome(async (home) => {
+        const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+        const handlers = installExtension();
+
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+        assert.ok(await until(() => existsSync(pendingFile)), "a report that reached nobody is queued");
+
+        process.env.PI_COST_URL = refusing.url;
+        const laterHandlers = installExtension();
+        await laterHandlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("usage-only.jsonl"),
+        });
+
+        assert.ok(
+          await until(() => !existsSync(pendingFile)),
+          "a replay the server read and refused leaves the queue: the same bytes get the same answer",
+        );
+      });
+    });
+  } finally {
+    await refusing.stop();
+  }
+});
+
+test("a report that never lands stops being retried after five attempts", { timeout: 30000 }, async () => {
+  const deadUrl = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+
+  await withReportEnv({ PI_COST_URL: deadUrl, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+    await withTempHome(async (home) => {
+      const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+      const logFile = join(home, ".pi", "agent", "extensions", "pi-cost.log");
+      const handlers = installExtension();
+
+      const settle = async () => {
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+        // Past the one-millisecond report floor, and enough time for the unawaited send to fail.
+        await new Promise((wait) => setTimeout(wait, 200));
+      };
+
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        await settle();
+      }
+
+      assert.equal(existsSync(pendingFile), false, "an exhausted report stops being carried");
+      const log = readFileSync(logFile, "utf8");
+      assert.match(log, /gave up on session .* after 5 attempts/, "and says so where a user can find it");
+    });
+  });
+});
+
+// The CLI runs as its own process, the way it is used: on a Pi box, with no shared database.
+// What this proves is the second client of the ingest contract — files on disk in, rows in the
+// dashboard out — which the payload tests above only cover for the live extension.
+test("cli-push sends a directory of session files through the ingest endpoint", { timeout: 60000 }, async () => {
+  const db = openDatabase(":memory:");
+  migrateUp(db);
+  const app = createApp(db, {
+    // No sessions directory on this side, so the dashboard cannot be credited with the rows.
+    sessionsDir: join(fakeHome, "no-sessions"),
+    timeZone: "UTC",
+    scanner: () => ({ enabled: false, reason: "sessions directory not found", fileCount: null }),
+  });
+  const server = await new Promise((boot) => {
+    const listening = app.listen(0, "127.0.0.1", () => boot(listening));
+  });
+
+  try {
+    const run = await new Promise((done) => {
+      execFile(
+        process.execPath,
+        [
+          "--experimental-strip-types",
+          cliPushPath,
+          "--sessions-dir",
+          fixturesDir,
+          "--url",
+          `http://127.0.0.1:${server.address().port}/api/ingest`,
+          "--token",
+          "",
+        ],
+        { env: { ...process.env, HOME: fakeHome } },
+        (error, stdout, stderr) => done({ code: error?.code ?? 0, stdout, stderr }),
+      );
+    });
+
+    assert.equal(run.code, 0, `the CLI exited non-zero: ${run.stdout}${run.stderr}`);
+
+    const files = readdirSync(fixturesDir).filter((name) => name.endsWith(".jsonl"));
+    assert.match(run.stdout, new RegExp(`sent\\s+${files.length} session\\(s\\)`), run.stdout);
+
+    // Two of these fixtures are the same session id — a subagent and the fork made from it —
+    // so five files are four sessions, and the dashboard keys rows on the id.
+    const sessionIds = new Set(
+      files.map((name) => JSON.parse(readFileSync(join(fixturesDir, name), "utf8").split("\n")[0]).id),
+    );
+
+    const rows = db.prepare("SELECT session_id, entry_count, last_source FROM sessions").all();
+    assert.equal(rows.length, sessionIds.size, "every session in the directory landed in the dashboard's database");
+    assert.ok(rows.every((row) => row.last_source === "push"), "and each is attributed to a push");
+
+    const usageFacts = db.prepare("SELECT COUNT(*) AS n FROM usage_events").get().n;
+    assert.ok(usageFacts > 0, "the pushed sessions carry their usage facts, not just rollups");
+  } finally {
+    await new Promise((done) => server.close(done));
+    db.close();
+  }
 });
