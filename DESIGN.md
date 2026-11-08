@@ -845,7 +845,7 @@ and it is the whole reason the report must not be awaited.
 | `agent_settled` | Yes | Yes, if you await | Yes, if you do not await |
 | `session_shutdown` | Yes | No prompts remain | Use for the final report, safe to await |
 
-### Automatic report: fire-and-forget, unref'd, interactive-only
+### Automatic report: fire-and-forget, unref'd, skipped in one-shot runs
 
 Two separate problems had to be solved, and the second one was not visible in the code
 reading:
@@ -860,9 +860,15 @@ reading:
 
 Both are handled: the background request is built with `node:http` (or `node:https` for an
 `https:` URL) so its socket can be `unref()`'d, which is not available through `fetch`; and
-automatic reports run only when `ctx.mode === "tui"`. A print-mode run has no prompts to
-protect, and in a deployment that scans session files the scanner reads its file seconds
-later, so skipping the report loses nothing.
+the automatic report names the modes that must stay silent —
+`ctx.mode === "print" || ctx.mode === "json"` — rather than the one allowed to speak. A
+one-shot run has no prompts to protect, and in a deployment that scans session files the
+scanner reads its file seconds later, so skipping its report loses nothing. The modes that do
+report are the two that keep prompting: `tui` in a terminal, and `rpc` in anything running Pi
+in-process — ThinkRail and the other host-driven clients — so a live session shows up while it
+is still running instead of only when it exits. The guard used to be `ctx.mode === "tui"`,
+which silenced every host-driven session along with the print run it was written for; the
+report handler is now driven through all four modes in `extension.test.js`.
 
 The protocol split is not cosmetic. The first version built every background request with
 `node:http`, which cannot speak TLS: pointing `PI_COST_URL` at an https server sent
@@ -875,7 +881,7 @@ self-signed localhost certificate, so the handshake is exercised rather than ass
 ```ts
 pi.on("agent_settled", async (_event, ctx) => {
   if (!config.autoEnabled || disabledForSession) return;
-  if (ctx.mode !== "tui") return;                    // print/RPC runs: the scanner covers them
+  if (ctx.mode === "print" || ctx.mode === "json") return;  // one-shot runs: the scanner covers them
   if (Date.now() - lastReportMs < config.minIntervalMs) return;
   if (inFlight) return;                              // coalesce: one request outstanding
 
@@ -941,7 +947,7 @@ indistinguishable from not reporting.
 | `buildSnapshot` | 0.27 ms worst measured (4,682 entries) | in the handler, synchronous |
 | Handler overhead | ~0 ms (not awaited, socket unref'd) | — |
 | Prompt stall | 0 ms by design | guarded by not awaiting |
-| Print-mode overhead | 0 ms | auto reports skip non-TUI modes |
+| One-shot run overhead | 0 ms | auto reports skip print and JSON |
 | Shutdown report | up to 2000 ms, once | only at exit, nothing left to block |
 
 If the payload stringify ever matters on a huge session, cap `events` in the payload to
@@ -955,7 +961,7 @@ rollup totals stay exact either way. Listed as a known escape hatch, not impleme
 | Server down | None | request fails, is logged, report skipped; the scan recovers the data |
 | Server slow | None for prompts | in-flight coalescing blocks further pushes |
 | Slow server at exit (print mode) | up to 2 s once | awaited shutdown report with a 2 s cap |
-| Slow server at exit (interactive) | None | socket is unref'd, exit does not wait |
+| Slow server at exit (terminal or host-driven) | None | socket is unref'd, exit does not wait |
 | Pi killed (`kill -9`) | — | No push. Scan recovers; the file has everything |
 | Extension throws | Pi reports the handler error and continues | Handler bodies are wrapped |
 | Server rejects payload (4xx) | None | Logged to `~/.pi/agent/extensions/pi-cost.log` |
@@ -1391,9 +1397,10 @@ touches Pi's hot path.
    so no action needed. Noted so nobody "fixes" the session rollup to match.
 5. **Cost in a currency other than USD** — Pi's catalog prices are USD per million
    tokens. A display-currency option is a formatting concern only; store micros.
-6. **Should `/pi-cost` work in `--mode json` / RPC?** The command is UI-optional
-   (`ctx.hasUI`). Reporting still works with no UI, so the design supports
-   headless Pi runs. Confirm that headless reporting is wanted before Phase 7.
+6. **Should `/pi-cost` work in `--mode json` / RPC?** Settled: automatic reporting is
+   wanted headless, so `agent_settled` reports in `rpc` as well as `tui` (see §automatic
+   report). The command's dialogs stay gated on `ctx.hasUI`, which RPC clients set when they
+   provide them — ThinkRail does — so a host-driven session gets the settings menu too.
 
 ---
 

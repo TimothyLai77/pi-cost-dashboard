@@ -72,11 +72,12 @@ rejected the body, so nothing is written. Tokens are masked in every listing
 | `agent_settled` | **No** | Pi awaits settled handlers and defers prompts while they run |
 | `session_shutdown` | Yes, 2 s cap | Process exit kills in-flight requests; no prompts left to delay |
 
-Automatic reports run only in interactive sessions. A print-mode run has no prompts to
-protect, and in a deployment that scans session files the scanner picks its session up
-seconds later. In a push-fed deployment — the container scans nothing — the report at
-session exit is what puts a print-mode session on the dashboard, so run it with
-`PI_COST_URL` set.
+Automatic reports run in the sessions that keep prompting: `tui` in a terminal, and `rpc` in
+anything running Pi in-process — ThinkRail and the other host-driven clients. The one-shot
+`print` and `json` runs stay silent, because a request still in flight would hold their exit
+open, and in a deployment that scans session files the scanner picks their files up seconds
+later. In a push-fed deployment — the container scans nothing — the report at session exit is
+what puts a print-mode session on the dashboard, so run it with `PI_COST_URL` set.
 
 ## Incognito mode
 
@@ -113,7 +114,7 @@ session in a new Pi process re-seeds from the default, so lift it with
    Against a sink that sleeps 5 s per request, `pi -p` took 6.0 s; the 2 s cap did not
    help, because the unfinished background request is what kept the process alive. Fixed
    by `socket.unref()` via `node:http` (not reachable through `fetch`), plus skipping
-   automatic reports outside interactive mode.
+   automatic reports in the one-shot `print` and `json` modes.
 
 Measured, 5 samples per configuration:
 

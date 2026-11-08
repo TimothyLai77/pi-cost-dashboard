@@ -26,14 +26,17 @@
  * `session_shutdown` is the opposite case. Process exit kills in-flight requests, so that
  * report must be awaited, and nothing is left to block because there are no prompts after it.
  *
- * ── Why automatic reports only run in interactive sessions ───────────────────────
+ * ── Why automatic reports skip the one-shot run modes ────────────────────────────
  *
  * Measured against a sink that sleeps 5 seconds per request, `pi -p` took 6.0 s with
  * automatic reporting and 1.0 s without it. Not awaiting the fetch keeps your prompts
- * fast, but an outstanding request keeps Node's event loop alive, so a non-interactive
- * run cannot exit until it finishes. Unrefing the socket fixes that, and skipping the
- * automatic report outside interactive mode avoids the whole question: the scanner reads
- * the session file from disk a moment later anyway, so a print-mode run loses nothing.
+ * fast, but an outstanding request keeps Node's event loop alive, so a run whose only
+ * job is to finish cannot exit until the request does. Unrefing the socket fixes that,
+ * and `print` and `json` skip the automatic report as well, which avoids the question
+ * outright; the scanner reads their session file from disk a moment later, so they lose
+ * nothing. `tui` and `rpc` are the modes that keep prompting -- a terminal session and a
+ * host-driven one, since every embedder that runs Pi in-process reports `rpc` -- so both
+ * get live reports.
  *
  * Nothing is started in the extension factory. Pi loads extensions even when no session
  * starts, and the docs forbid starting sockets, timers, or watchers there.
@@ -739,7 +742,7 @@ export const runSettingsAction = async (
       [
         `Endpoint: ${config.url}`,
         `Token: ${maskSecret(config.token)}`,
-        `Automatic reporting: ${config.autoEnabled ? "on" : "off"} (settled reports run in interactive sessions only)`,
+        `Automatic reporting: ${config.autoEnabled ? "on" : "off"} (settled reports run in terminal and host-driven sessions; print and JSON runs are skipped)`,
         `Source: ${config.source === "file" ? "saved settings" : "environment variables"}`,
         `File: ${file}`,
       ].join("\n"),
@@ -1124,9 +1127,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_settled", async (_event, ctx) => {
     const active = config;
     if (!active || !active.autoEnabled || disabledForSession) return;
-    // Automatic reports run in interactive sessions only. A print-mode run has no prompts
-    // to keep fast, and the scanner picks its file up seconds later.
-    if (ctx.mode !== "tui") return;
+    // Print and JSON runs are one-shot: a request still in flight holds Node's event loop
+    // open, so they cannot exit, and the scanner picks their file up off disk seconds later.
+    // Terminal and host-driven (rpc) sessions keep prompting and want live reports.
+    if (ctx.mode === "print" || ctx.mode === "json") return;
     if (Date.now() - lastReportMs < active.minIntervalMs) return;
     if (inFlight) return; // coalesce: at most one request outstanding
 
