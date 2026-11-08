@@ -105,6 +105,11 @@ interface SessionSnapshot {
   entryCount: number;
   costMicros: number;
   totalTokens: number;
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  toolResults: number;
+  totalMessages: number;
   facts: UsageFact[];
 }
 
@@ -455,6 +460,12 @@ export const buildSnapshot = (sessionManager: SessionSource): SessionSnapshot | 
     entryCount,
     costMicros,
     totalTokens,
+    // Message counts for the push payload; the server requires them (issue #13).
+    userMessages,
+    assistantMessages,
+    toolCalls,
+    toolResults,
+    totalMessages,
     facts,
   };
 };
@@ -490,6 +501,11 @@ export const buildPayload = (snapshot: SessionSnapshot, reportedBy: "command" | 
     cacheReadTokens: snapshot.facts.reduce((sum, fact) => sum + fact.cacheReadTokens, 0),
     cacheWriteTokens: snapshot.facts.reduce((sum, fact) => sum + fact.cacheWriteTokens, 0),
     totalTokens: snapshot.facts.reduce((sum, fact) => sum + fact.totalTokens, 0),
+    userMessages: snapshot.userMessages,
+    assistantMessages: snapshot.assistantMessages,
+    toolCalls: snapshot.toolCalls,
+    toolResults: snapshot.toolResults,
+    totalMessages: snapshot.totalMessages,
   },
   events: snapshot.facts,
   reportedBy,

@@ -237,6 +237,15 @@ test("a missing cost component is refused by name", () => {
   assert.equal(missingTotal.field, "totals.costOutputMicros");
 });
 
+test("a missing message counter is refused by name, not stored as a zero", () => {
+  const totals = { ...validPayload().totals };
+  delete totals.userMessages;
+  const result = validateIngestPayload({ ...validPayload(), totals });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.field, "totals.userMessages");
+});
+
 test("cost components that do not add up to the cost are refused", () => {
   const payload = validPayload();
 

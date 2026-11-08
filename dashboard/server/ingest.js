@@ -118,6 +118,12 @@ const TOTAL_REQUIRED = [
   "cacheReadTokens",
   "cacheWriteTokens",
   "totalTokens",
+  // Message counters are required like the cost keys — see DESIGN.md §5 (issue #13).
+  "userMessages",
+  "assistantMessages",
+  "toolCalls",
+  "toolResults",
+  "totalMessages",
 ];
 
 const EVENT_KEYS = new Set([
@@ -364,11 +370,11 @@ export const payloadToRecord = (payload) => ({
     cacheReadTokens: payload.totals.cacheReadTokens ?? 0,
     cacheWriteTokens: payload.totals.cacheWriteTokens ?? 0,
     totalTokens: payload.totals.totalTokens ?? 0,
-    userMessages: payload.totals.userMessages ?? 0,
-    assistantMessages: payload.totals.assistantMessages ?? 0,
-    toolCalls: payload.totals.toolCalls ?? 0,
-    toolResults: payload.totals.toolResults ?? 0,
-    totalMessages: payload.totals.totalMessages ?? 0,
+    userMessages: payload.totals.userMessages,
+    assistantMessages: payload.totals.assistantMessages,
+    toolCalls: payload.totals.toolCalls,
+    toolResults: payload.totals.toolResults,
+    totalMessages: payload.totals.totalMessages,
   },
   events: payload.events.map((event) => ({
     entryId: event.entryId,
