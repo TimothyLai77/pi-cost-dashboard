@@ -15,7 +15,8 @@
  * Usage (on the Pi box):
  *   node --experimental-strip-types pi-extension/cli-push.ts [flags]
  *
- * Flags:
+ * Each flag takes its value as a separate word — `--limit 50`, not `--limit=50`, which is
+ * rejected rather than ignored, because an ignored bound here means sending everything:
  *   --sessions-dir <dir>  default: PI_COST_SESSIONS_DIR, then Pi's settings.json, then ~/.pi/agent/sessions
  *   --url <url>           default: saved settings, then PI_COST_URL
  *   --token <token>       default: saved settings, then PI_COST_TOKEN
@@ -31,7 +32,26 @@ import { aggregateSession, formatUsd } from "../dashboard/server/scanner/aggrega
 import { listSessionFiles, resolveSessionsDir } from "../dashboard/server/scanner/scan.js";
 import { buildPayload, effectiveConfig, postBackground, readSettings } from "./pi-cost.ts";
 
+/** Flags that take a value, and flags that do not. Anything else is refused. */
+const VALUE_FLAGS = ["--sessions-dir", "--url", "--token", "--since", "--limit"];
+const BARE_FLAGS = ["--dry-run"];
+
 const args = process.argv.slice(2);
+
+// An argument this command does not know is not a harmless typo: `--limit=50` would leave the
+// limit unset, and unset means "send the whole directory". Refuse the spelling instead.
+for (const arg of args) {
+  if (!arg.startsWith("--")) continue;
+  const [name, inlineValue] = [arg.split("=")[0], arg.includes("=")];
+  if (inlineValue || (!VALUE_FLAGS.includes(name) && !BARE_FLAGS.includes(name))) {
+    console.error(
+      `I do not understand "${arg}". Known flags: ${[...VALUE_FLAGS, ...BARE_FLAGS].join(", ")}. ` +
+        "Each takes its value as a separate word.",
+    );
+    process.exit(1);
+  }
+}
+
 const flagValue = (name) => {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
@@ -79,7 +99,12 @@ if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
   console.error(`--since wants YYYY-MM-DD, got "${since}".`);
   process.exit(1);
 }
-const limit = Number(flagValue("--limit") ?? Infinity);
+const limitRaw = flagValue("--limit");
+const limit = limitRaw === undefined ? Infinity : Number(limitRaw);
+if (limitRaw !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+  console.error(`--limit wants a positive whole number, got "${limitRaw}".`);
+  process.exit(1);
+}
 
 const files = listSessionFiles(sessionsDir);
 console.log(`sessions dir  ${sessionsDir}`);
