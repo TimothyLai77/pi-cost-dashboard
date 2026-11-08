@@ -255,6 +255,19 @@ micro-dollar, worst session 7 micro-dollars ($0.000007). The parts are stored as
 reported them, and the ingest validator rejects a client whose parts are off by more than
 that.
 
+**A whole with no split.** Pi's pricing pass does not always write the four. Measured on this
+machine: a session of 371 events carried 25 subagent calls billed by a custom provider
+(`strata` / `qwen3.8-flash-next-unsloth-ud-iq4_xs-v31`) whose `usage.cost` blocks read
+`{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.019048 }` — a real cost,
+billed as one number. So an all-zero split beside a non-zero total means *this provider
+bills only a whole*, and is recorded that way: the total is the money, the split stays
+empty, and a bar's stacked parts can legitimately sum to less than the bar. Refusing such a
+payload is what a stricter earlier rule did, and it cost the whole session — 763 entries of
+real spend frozen at its last accepted snapshot while its cost kept climbing. Losing a
+session's money to defend a stacked chart is the wrong trade, so the parts are checked only
+where they exist (§5). A non-zero split that disagrees with its own cost is still a broken
+client, and still refused.
+
 ### DDL
 
 `dashboard/server/migrations/001_init.sql`
@@ -527,11 +540,13 @@ Notes:
 - Nothing in the payload is conversation content. Enforced by validation:
   unknown keys are rejected, `name` is capped at 200 characters, and there is
   no prompt field to send.
-- Version 2 added the four cost components, per event and in `totals`. They are required,
-  so every stored row has a split, and they must add up to the `costMicros` next to them.
-  Version 1 is rejected outright: the server accepts 2 only, which means the extension and
-  the server deploy together, and a Pi still on the older extension stops reporting until it
-  is updated (file scanning is unaffected).
+- Version 2 added the four cost components, per event and in `totals`. The keys are required,
+  but a row need not have a split: an all-zero split beside a real cost is read as "this
+  provider bills only a whole" (§4). Where a split *is* reported it must add up — per event
+  to its own `costMicros`, and per session to the split its events report. Version 1 is
+  rejected outright: the server accepts 2 only, which means the extension and the server
+  deploy together, and a Pi still on the older extension stops reporting until it is updated
+  (file scanning is unaffected).
 
 ### Validation on ingest
 
@@ -543,10 +558,13 @@ Server-side, in this order:
 4. Every numeric field is a finite non-negative number; `costMicros` integer.
 5. Recompute: `totals` must be within 1% of the sum of `events`, else `422` with
    the mismatch. This catches a broken extension before it stores bad totals.
-6. Recompute: the four cost components must add up to the `costMicros` they are reported
-   next to — per event within 4 micro-dollars, per session within 2 micro-dollars per
-   event. Each part is rounded on its own, so a couple of micro-dollars is arithmetic, and
-   a cent is a broken client (§4).
+6. Recompute the split, where it was reported: an event's four parts must add up to its own
+   `costMicros` within 4 micro-dollars, and the session's parts must add up to the sum of its
+   events' parts within 2 micro-dollars per event. Four zeros beside a cost is no split, so it
+   is skipped rather than refused (§4); a session's split is held to its events' split rather
+   than to its whole so that one whole-billed event does not refuse a session. Each part is
+   rounded on its own, so a couple of micro-dollars is arithmetic, and a cent is a broken
+   client (§4).
 7. `entryCount >= sessions.entry_count` for an existing session (§7).
 
 ---
@@ -964,7 +982,7 @@ What happens to a snapshot that did not land is decided by who refused it:
 |---|---|
 | No status at all (refused connection, DNS, TLS, timeout) | Queued: nobody read it, so it is owed |
 | 5xx | Queued: a server having a bad day may recover |
-| 4xx | Dropped: the same bytes get the same answer. The server's own reason (`incognito`, `stored_row_conflict`, a validation message) rides in the outcome, so the log names it instead of a bare status |
+| 4xx | Dropped: the same bytes get the same answer. The server's own reason rides in the outcome — `incognito`, `stored_row_conflict`, or a validation failure naming the field and the rule it broke — so the log names the problem instead of a bare status. The awaited paths (`/pi-cost`, session exit) read the same body and say the same thing |
 | 2xx with `applied: false` | Dropped: the server holds a newer snapshot of that session |
 
 The queue is `~/.pi/agent/extensions/pi-cost-pending.json`, written 0600 like the
@@ -1433,7 +1451,7 @@ safe to do repeatedly, at any scale, without ever reading a database directly.
 | Unit: scanner | Cold scan, warm scan with unchanged files skips all, changed mtime re-parses one, missing file deletes the row |
 | Unit: ingest guard | Stale `entryCount` rejected; equal accepted; out-of-order arrival never lowers `cost_micros` |
 | Unit: validation | Bad `schemaVersion`, negative token, non-numeric cost, oversized body, unknown key |
-| Unit: cost split | A version 1 payload is refused; a missing component is refused by name; parts that do not add up to the cost are refused at both event and session level, within the rounding allowance |
+| Unit: cost split | A version 1 payload is refused; a missing component is refused by name; a non-zero split that does not add up is refused at both event and session level, within the rounding allowance; a cost billed as a whole with four zero parts is accepted at both levels, and its stored events still sum to the session |
 | Unit: `aggregate.js` split | Fixture parts are hand-added from each `usage.cost` block and equal the stored `cost_input_micros` and friends; an unpriced model reports four zeros |
 | Integration | Backfill this machine's 266 sessions, assert the grand total equals the independent Appendix A scanner run in the same second, and assert session row count equals the `.jsonl` file count |
 | Integration | Chart query returns 58 day buckets with correct UTC grouping |

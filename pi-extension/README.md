@@ -175,10 +175,13 @@ from real fixtures and requires the server's validator to accept them.
 
 Version 2 added the four parts of every bill — `costInputMicros`, `costOutputMicros`,
 `costCacheReadMicros`, `costCacheWriteMicros` — on each event and in `totals`. Pi's pricing
-pass writes those four next to the total in every usage block, so the extension reads them
-rather than computing them. The server accepts version 2 snapshots, so the extension and the
-server deploy together: a Pi running the older extension gets
-`unsupported_schema_version` back and stops self-reporting until it is reloaded.
+pass usually writes those four next to the total, so the extension reads them rather than
+computing them. Not always: a custom provider can bill a call as one number, leaving the four
+parts at zero beside a real total. The extension sends what the file says, and the server reads
+an all-zero split as "no split reported" rather than a broken client (DESIGN.md §4). The server
+accepts version 2 snapshots, so the extension and the server deploy together: a Pi running the
+older extension gets `unsupported_schema_version` back and stops self-reporting until it is
+reloaded.
 
 `tombstone.schema.json` is version 3: the incognito toggle, a second payload shape on the
 same endpoint — `{ schemaVersion: 3, sessionId, incognito }`. Snapshots stay on 2, so
