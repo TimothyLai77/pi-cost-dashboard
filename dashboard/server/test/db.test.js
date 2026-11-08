@@ -18,7 +18,7 @@ import { currentVersion, listMigrations, migrateDown, migrateUp, openDatabase } 
 import { upsertSession } from "../upsert.js";
 import { ingestSession, SCHEMA_VERSION } from "../ingest.js";
 import { aggregateSession } from "../scanner/aggregate.js";
-import { listSessionFiles, resolveSessionsDir, scanSessions } from "../scanner/scan.js";
+import { listSessionFiles, resolveSessionsDir, scannerStatus, scanSessions } from "../scanner/scan.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
@@ -438,6 +438,28 @@ test("subagent artifact directories are not treated as sessions", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
     db.close();
+  }
+});
+
+test("the scanner says what it can see, so a push-fed box is not mistaken for a broken one", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-cost-scan-"));
+  try {
+    const projectDir = join(dir, "--home-user-project-x--");
+    mkdirSync(join(projectDir, "subagent-artifacts"), { recursive: true });
+    copyFileSync(join(fixturesDir, "full-usage.jsonl"), join(projectDir, "session-a.jsonl"));
+    copyFileSync(join(fixturesDir, "usage-only.jsonl"), join(dir, "session-b.jsonl"));
+
+    const reachable = scannerStatus(dir);
+    assert.equal(reachable.enabled, true);
+    assert.equal(reachable.reason, null);
+    assert.equal(reachable.fileCount, 2, "artifact files are not counted as sessions");
+
+    const pushFed = scannerStatus(join(dir, "never-created"));
+    assert.equal(pushFed.enabled, false, "a missing directory means nothing to scan, not a crash");
+    assert.equal(pushFed.reason, "sessions directory not found");
+    assert.equal(pushFed.fileCount, null, "not looked is a different answer from none found");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
