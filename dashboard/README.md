@@ -109,7 +109,15 @@ dashboard/
 │   ├── db.js               # better-sqlite3 handle + migration runner
 │   ├── upsert.js           # guarded session upsert, shared by scan and ingest
 │   ├── incognito.js        # tombstone guard: isExcluded, purge, tombstone, lift
-│   ├── queries.js          # summary, daily, sessions, models, flows, lifetime stats, health
+│   ├── queries/            # read queries, one module per answer, behind an index.js barrel
+│   │   ├── shared.js       # money shaping, filter builder, shared columns, bucket sums
+│   │   ├── summary.js      # today / 7 days / 30 days / all time
+│   │   ├── timeseries.js   # daily points and the 24-hour drill-down
+│   │   ├── sessions.js     # session list, one session's ledger
+│   │   ├── models.js       # spend by provider and model
+│   │   ├── flows.js        # model-project graph for the flow drawing
+│   │   ├── lifetime.js     # whole-ledger totals, day series, records
+│   │   └── meta.js         # filter values for the controls, health check
 │   ├── migrations/         # numbered .sql with .down.sql partners
 │   ├── scanner/
 │   │   ├── aggregate.js    # one session file -> { session, events }   (pure)

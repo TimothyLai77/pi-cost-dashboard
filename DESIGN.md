@@ -1260,7 +1260,8 @@ pi-cost-dashboard/
     │   ├── migrations/
     │   │   └── 001_init.sql    # UP + DOWN, reversible
     │   ├── ingest.js           # POST /api/ingest: validate + guarded upsert
-    │   ├── queries.js          # summary, daily, sessions, models, lifetime stats
+    │   ├── queries/            # read queries, one module per answer
+    │   │   └── shared.js       # the kernel they all share
     │   └── scanner/
     │       ├── aggregate.js    # one file -> { session, events }  (pure)
     │       └── scan.js         # directory walk + scan_state cache
