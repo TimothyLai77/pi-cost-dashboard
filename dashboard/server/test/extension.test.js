@@ -23,11 +23,22 @@ import { createApp } from "../index.js";
 import { migrateUp, openDatabase } from "../db.js";
 
 const extensionPath = join(import.meta.dirname, "..", "..", "..", "pi-extension", "pi-cost.ts");
+
+// The extension reads its endpoint, its token, and its log path out of the real Pi directory,
+// resolved from the home directory when the module loads. Point HOME at an empty temporary one
+// first: with nothing saved there, the extension falls back to the environment a test sets, and a
+// failed report logs into the temp directory instead of the developer's `pi-cost.log`. Node runs
+// each test file in its own process, so the change stays inside this file.
+const fakeHome = mkdtempSync(join(tmpdir(), "pi-cost-extension-home-"));
+process.env.HOME = fakeHome;
+process.on("exit", () => rmSync(fakeHome, { recursive: true, force: true }));
+
 const {
   buildPayload,
   buildSnapshot,
   buildTombstonePayload,
   clearSettings,
+  default: createExtension,
   effectiveConfig,
   maskSecret,
   postBackground,
@@ -317,6 +328,105 @@ test("postBackground carries no token header when none is configured", async () 
   } finally {
     stop();
   }
+});
+
+/* ── Which run modes may report on their own ─────────────────────────────────── */
+
+/**
+ * Install the extension into a stand-in Pi and hand back the handlers it registered.
+ *
+ * The automatic report lives inside a hook handler, so testing it means running the real
+ * extension factory. `config` is read at install time, so each install is a clean session: its
+ * own throttle clock, its own in-flight flag, and the endpoint currently in the environment.
+ *
+ * @returns {Map<string, Function>} the handlers, keyed by event name
+ */
+const installExtension = () => {
+  const handlers = new Map();
+
+  createExtension({
+    on: (event, handler) => handlers.set(event, handler),
+    registerCommand: () => {},
+  });
+
+  return handlers;
+};
+
+/**
+ * Settle an agent in one run mode and report what reached the sink.
+ *
+ * @param {string} mode The `ctx.mode` Pi reports for this run
+ * @param {Promise<object>} received Resolves with the first request the sink captured
+ * @returns {Promise<object | null>} the captured request, null when nothing was sent
+ */
+const settleInMode = async (mode, received) => {
+  const handlers = installExtension();
+
+  // The settled handler reads the run mode and the session manager, and nothing else.
+  await handlers.get("agent_settled")(undefined, {
+    mode,
+    sessionManager: fakeSessionManager("full-usage.jsonl"),
+  });
+
+  // The report is deliberately not awaited, so give the request a moment to arrive.
+  const quietFor = (ms) =>
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), ms);
+      timer.unref();
+    });
+
+  const request = await Promise.race([received, quietFor(400)]);
+  return request ? { method: request.method, url: request.url, payload: JSON.parse(request.body) } : null;
+};
+
+test("settled reports run in tui and rpc, and stay silent in print and JSON", async () => {
+  const saved = {
+    url: process.env.PI_COST_URL,
+    interval: process.env.PI_COST_MIN_INTERVAL_MS,
+    incognito: process.env.PI_COST_INCOGNITO,
+  };
+  process.env.PI_COST_MIN_INTERVAL_MS = "1";
+  delete process.env.PI_COST_URL;
+  delete process.env.PI_COST_INCOGNITO;
+
+  const reported = {};
+  try {
+    // One sink and one install per mode: the throttle and the in-flight coalescing are per
+    // session, and the modes must not shadow each other's result.
+    for (const mode of ["tui", "rpc", "print", "json"]) {
+      const { url, received, stop } = await startCaptureServer("http");
+      process.env.PI_COST_URL = url;
+      try {
+        reported[mode] = await settleInMode(mode, received);
+      } finally {
+        stop();
+      }
+    }
+  } finally {
+    if (saved.url === undefined) delete process.env.PI_COST_URL;
+    else process.env.PI_COST_URL = saved.url;
+    if (saved.interval === undefined) delete process.env.PI_COST_MIN_INTERVAL_MS;
+    else process.env.PI_COST_MIN_INTERVAL_MS = saved.interval;
+    if (saved.incognito === undefined) delete process.env.PI_COST_INCOGNITO;
+    else process.env.PI_COST_INCOGNITO = saved.incognito;
+  }
+
+  const sessionId = buildSnapshot(fakeSessionManager("full-usage.jsonl")).sessionId;
+
+  for (const mode of ["tui", "rpc"]) {
+    assert.ok(reported[mode], `${mode} reports while the session is still running`);
+    assert.equal(reported[mode].method, "POST", `${mode} pushes to the ingest endpoint`);
+    assert.equal(reported[mode].payload.sessionId, sessionId, `${mode} reports this session`);
+    assert.equal(reported[mode].payload.reportedBy, "agent_settled", `${mode} says what woke it`);
+
+    const accepted = validateIngestPayload(reported[mode].payload);
+    assert.equal(accepted.ok, true, `${mode} payload: ${accepted.reason ?? "accepted"}`);
+  }
+
+  // A print or JSON run cannot exit while a request is outstanding, and its session file is on
+  // disk for the scanner either way, so those two modes stay quiet.
+  assert.equal(reported.print, null, "a print run sends nothing");
+  assert.equal(reported.json, null, "a JSON run sends nothing");
 });
 
 /* ── Settings saved from the TUI ─────────────────────────────────────────────── */
