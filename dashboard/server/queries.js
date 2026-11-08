@@ -76,10 +76,38 @@ const FACT_COLUMNS = `u.occurred_at, u.session_id, u.cost_micros, u.total_tokens
               u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens`;
 
 /**
- * Fields a bucket adds up out of every fact row, in the order the columns are read.
+ * Shape a row of summed usage columns into the totals every endpoint reports.
+ *
+ * The summary windows and the lifetime page both answer the same question — what this set of
+ * usage facts spent — so they shape their answer the same way: the money pair, its four
+ * parts, the four token kinds, and how much work produced them. A chart bucket is not passed
+ * through here; it holds its sessions as a Set and sums no rows at all.
+ *
+ * @param {object} row Query row carrying cost_micros, the four cost parts, the five token
+ *   columns, sessions and events
+ * @returns {object} `costMicros`/`costUsd`, `costBreakdown`, the four token kinds, sessions, events
+ */
+const usageTotals = (row) => ({
+  ...money(row.cost_micros),
+  costBreakdown: costBreakdown(row),
+  totalTokens: row.total_tokens,
+  inputTokens: row.input_tokens,
+  outputTokens: row.output_tokens,
+  cacheReadTokens: row.cache_read_tokens,
+  cacheWriteTokens: row.cache_write_tokens,
+  sessions: row.sessions,
+  events: row.events,
+});
+
+/**
+ * The usage columns every total adds up, in the order they are read.
+ *
+ * One list feeds the SQL sums and the JavaScript bucket sums, so a day on the chart and the
+ * summary next to it cannot drift apart by leaving a field out of one of them.
+ *
  * @type {string[]}
  */
-const BUCKET_SUM_FIELDS = [
+const USAGE_SUM_FIELDS = [
   "cost_micros",
   "cost_input_micros",
   "cost_output_micros",
@@ -91,6 +119,22 @@ const BUCKET_SUM_FIELDS = [
   "cache_read_tokens",
   "cache_write_tokens",
 ];
+
+/**
+ * The SELECT list that turns usage facts into one totals row.
+ *
+ * Money in its four parts, tokens in their four kinds, and the sessions and events behind
+ * them. Written once because every endpoint that reports a whole total reads exactly these
+ * columns, so a sum cannot be missing from one endpoint and present in another.
+ *
+ * Names `u` for usage_events, so the caller must alias the table the same way.
+ * @type {string}
+ */
+const USAGE_TOTALS_SELECT = [
+  ...USAGE_SUM_FIELDS.map((field) => `COALESCE(SUM(u.${field}), 0) AS ${field}`),
+  "COUNT(DISTINCT u.session_id) AS sessions",
+  "COUNT(*) AS events",
+].join(",\n              ");
 
 /**
  * WHERE clauses and parameters for the filters every aggregate over usage shares.
@@ -167,7 +211,7 @@ const bucketFacts = (rows, keyFor) => {
       events: 0,
       sessions: new Set(),
     };
-    for (const field of BUCKET_SUM_FIELDS) {
+    for (const field of USAGE_SUM_FIELDS) {
       bucket[field] += row[field];
     }
     bucket.events += 1;
@@ -277,34 +321,13 @@ export const getSummary = (db, days = 7, options = {}) => {
         : { start: localDayStart(windowStartDay(dayCount, timeZone), timeZone) };
     const row = db
       .prepare(
-        `SELECT COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
-                COALESCE(SUM(u.cost_input_micros), 0) AS cost_input_micros,
-                COALESCE(SUM(u.cost_output_micros), 0) AS cost_output_micros,
-                COALESCE(SUM(u.cost_cache_read_micros), 0) AS cost_cache_read_micros,
-                COALESCE(SUM(u.cost_cache_write_micros), 0) AS cost_cache_write_micros,
-                COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
-                COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
-                COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
-                COUNT(DISTINCT u.session_id)     AS sessions,
-                COUNT(*)                         AS events
+        `SELECT ${USAGE_TOTALS_SELECT}
          FROM usage_events u
          ${sessionsJoin}
          ${where}`,
       )
       .get(params);
-    return {
-      ...money(row.cost_micros),
-      costBreakdown: costBreakdown(row),
-      totalTokens: row.total_tokens,
-      inputTokens: row.input_tokens,
-      outputTokens: row.output_tokens,
-      cacheReadTokens: row.cache_read_tokens,
-      cacheWriteTokens: row.cache_write_tokens,
-      sessions: row.sessions,
-      events: row.events,
-    };
+    return usageTotals(row);
   };
 
   return {
@@ -1073,18 +1096,7 @@ export const getLifetimeStats = (db, options = {}) => {
 
   const totals = db
     .prepare(
-      `SELECT COALESCE(SUM(u.cost_micros), 0) AS cost_micros,
-              COALESCE(SUM(u.cost_input_micros), 0) AS cost_input_micros,
-              COALESCE(SUM(u.cost_output_micros), 0) AS cost_output_micros,
-              COALESCE(SUM(u.cost_cache_read_micros), 0) AS cost_cache_read_micros,
-              COALESCE(SUM(u.cost_cache_write_micros), 0) AS cost_cache_write_micros,
-              COALESCE(SUM(u.total_tokens), 0) AS total_tokens,
-              COALESCE(SUM(u.input_tokens), 0) AS input_tokens,
-              COALESCE(SUM(u.output_tokens), 0) AS output_tokens,
-              COALESCE(SUM(u.cache_read_tokens), 0) AS cache_read_tokens,
-              COALESCE(SUM(u.cache_write_tokens), 0) AS cache_write_tokens,
-              COUNT(DISTINCT u.session_id) AS sessions,
-              COUNT(*) AS events
+      `SELECT ${USAGE_TOTALS_SELECT}
        FROM usage_events u
        ${sessionsJoin}
        WHERE TRUE ${subagents}`,
@@ -1197,15 +1209,7 @@ export const getLifetimeStats = (db, options = {}) => {
       offsetLabel: offsetLabel(timeZone),
     },
     totals: {
-      ...money(totals.cost_micros),
-      costBreakdown: costBreakdown(totals),
-      totalTokens: totals.total_tokens,
-      inputTokens: totals.input_tokens,
-      outputTokens: totals.output_tokens,
-      cacheReadTokens: totals.cache_read_tokens,
-      cacheWriteTokens: totals.cache_write_tokens,
-      sessions: totals.sessions,
-      events: totals.events,
+      ...usageTotals(totals),
       // The streaks page counts days by tokens, so "active" is stated here once, in words the
       // page uses: a day is active when it recorded any token at all.
       activeDays: daily.filter((point) => point.totalTokens > 0).length,
