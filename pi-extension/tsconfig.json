@@ -1,4 +1,5 @@
 {
+  "$comment": "Type-check dialect for pi-cost.ts. The path to Pi's own declarations is deliberately not written here: it lives outside this repo and moves with every Pi upgrade. Run ./check-types.sh — it discovers the current Pi install and injects the paths mapping into a temporary copy of this file.",
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023"],
@@ -7,13 +8,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"],
-    "typeRoots": ["/home/user/node_modules/@types"],
-    "paths": {
-      "@earendil-works/pi-coding-agent": [
-        "/home/user/.pi/agent/install/releases/1.4.0/node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"
-      ]
-    }
+    "types": ["node"]
   },
   "include": ["pi-cost.ts"]
 }

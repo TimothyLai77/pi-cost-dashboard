@@ -152,4 +152,5 @@ tombstones carry no new contract surface for report payloads.
 | `pi-cost.ts` | The extension |
 | `payload.schema.json` | Ingest contract, shared with the server |
 | `tombstone.schema.json` | Incognito tombstone contract, version 3 |
-| `tsconfig.json` | Type-check against Pi's real declarations: `/home/user/node_modules/.bin/tsc -p tsconfig.json` |
+| `tsconfig.json` | Type-check dialect for Pi's real declarations — carries no machine paths; the Pi location is injected by the script |
+| `check-types.sh` | Type-check: `./check-types.sh` — finds the current Pi install and a `tsc`, and works on any machine with Pi installed |
