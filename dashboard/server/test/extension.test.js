@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -1213,6 +1213,26 @@ test("a report that never lands stops being retried after five attempts", { time
 // The CLI runs as its own process, the way it is used: on a Pi box, with no shared database.
 // What this proves is the second client of the ingest contract — files on disk in, rows in the
 // dashboard out — which the payload tests above only cover for the live extension.
+
+/**
+ * Run `cli-push.ts` as its own process.
+ *
+ * The cost-dashboard endpoint and token are cleared from the inherited environment so a
+ * developer's own `PI_COST_URL` cannot quietly decide what a test saw.
+ *
+ * @param {{ args: string[], home?: string, env?: Record<string, string | undefined> }} options
+ * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
+ */
+const runCliPush = ({ args, home = fakeHome, env = {} }) =>
+  new Promise((done) => {
+    execFile(
+      process.execPath,
+      ["--experimental-strip-types", cliPushPath, ...args],
+      { env: { ...process.env, HOME: home, PI_COST_URL: undefined, PI_COST_TOKEN: undefined, ...env } },
+      (error, stdout, stderr) => done({ code: error?.code ?? 0, stdout, stderr }),
+    );
+  });
+
 test("cli-push sends a directory of session files through the ingest endpoint", { timeout: 60000 }, async () => {
   const db = openDatabase(":memory:");
   migrateUp(db);
@@ -1227,22 +1247,15 @@ test("cli-push sends a directory of session files through the ingest endpoint", 
   });
 
   try {
-    const run = await new Promise((done) => {
-      execFile(
-        process.execPath,
-        [
-          "--experimental-strip-types",
-          cliPushPath,
-          "--sessions-dir",
-          fixturesDir,
-          "--url",
-          `http://127.0.0.1:${server.address().port}/api/ingest`,
-          "--token",
-          "",
-        ],
-        { env: { ...process.env, HOME: fakeHome } },
-        (error, stdout, stderr) => done({ code: error?.code ?? 0, stdout, stderr }),
-      );
+    const run = await runCliPush({
+      args: [
+        "--sessions-dir",
+        fixturesDir,
+        "--url",
+        `http://127.0.0.1:${server.address().port}/api/ingest`,
+        "--token",
+        "",
+      ],
     });
 
     assert.equal(run.code, 0, `the CLI exited non-zero: ${run.stdout}${run.stderr}`);
@@ -1266,4 +1279,81 @@ test("cli-push sends a directory of session files through the ingest endpoint", 
     await new Promise((done) => server.close(done));
     db.close();
   }
+});
+
+// The order the CLI documents — flag, then saved settings, then environment — is easy to break
+// with an object spread, and breaking it silently is the worst version: a settings file with no
+// token key used to be read as "saved: no token", so every report went out unauthenticated, each
+// 401 was counted as a refusal the server had answered, and the run still exited 0.
+test("cli-push resolves its endpoint and token from flag, then settings, then environment", { timeout: 60000 }, async () => {
+  const homeWithUrlOnly = mkdtempSync(join(tmpdir(), "pi-cost-cli-home-"));
+  const homeWithNothing = mkdtempSync(join(tmpdir(), "pi-cost-cli-home-"));
+  const extensionsDir = join(homeWithUrlOnly, ".pi", "agent", "extensions");
+  mkdirSync(extensionsDir, { recursive: true });
+  writeFileSync(
+    join(extensionsDir, "pi-cost.json"),
+    JSON.stringify({ url: "https://settings-file.invalid/api/ingest" }),
+  );
+
+  const urlOnlyFromSettings = ["--dry-run", "--sessions-dir", fixturesDir];
+  const envWithToken = {
+    PI_COST_URL: "http://127.0.0.1:9/api/ingest",
+    PI_COST_TOKEN: "token-from-the-environment",
+  };
+
+  try {
+    // One assertion proves both orders at once: the saved URL beats the environment's, and
+    // the environment's token is still used because the settings file never mentions a token.
+    const savedUrlEnvToken = await runCliPush({ args: urlOnlyFromSettings, home: homeWithUrlOnly, env: envWithToken });
+    assert.match(
+      savedUrlEnvToken.stdout,
+      /endpoint\s+https:\/\/settings-file\.invalid\/api\/ingest \(with token\)/,
+      `the saved endpoint wins and the environment token is still used: ${savedUrlEnvToken.stdout}`,
+    );
+
+    const clearWithFlag = await runCliPush({
+      args: [...urlOnlyFromSettings, "--token", ""],
+      home: homeWithUrlOnly,
+      env: envWithToken,
+    });
+    assert.doesNotMatch(
+      clearWithFlag.stdout,
+      /\(with token\)/,
+      '--token "" stays the deliberate "no token", overriding the environment',
+    );
+
+    const environmentOnly = await runCliPush({ args: urlOnlyFromSettings, home: homeWithNothing, env: envWithToken });
+    assert.match(
+      environmentOnly.stdout,
+      /endpoint\s+http:\/\/127\.0\.0\.1:9\/api\/ingest \(with token\)/,
+      `with no settings file the environment supplies both: ${environmentOnly.stdout}`,
+    );
+
+    const noTokenAnywhere = await runCliPush({
+      args: [...urlOnlyFromSettings, "--url", "http://127.0.0.1:9/api/ingest"],
+      home: homeWithNothing,
+    });
+    assert.doesNotMatch(noTokenAnywhere.stdout, /\(with token\)/, "no token anywhere means no token header");
+  } finally {
+    rmSync(homeWithUrlOnly, { recursive: true, force: true });
+    rmSync(homeWithNothing, { recursive: true, force: true });
+  }
+});
+
+// Every one of these would otherwise default to the most dangerous answer this command has:
+// an unset limit means the whole directory, and a swallowed flag means an empty token.
+test("cli-push refuses an argument it cannot read instead of guessing", { timeout: 60000 }, async () => {
+  const readable = ["--dry-run", "--sessions-dir", fixturesDir, "--url", "http://127.0.0.1:9/api/ingest"];
+
+  const limitWithoutValue = await runCliPush({ args: [...readable, "--limit"] });
+  assert.equal(limitWithoutValue.code, 1, "a --limit with nothing after it must not mean 'no limit'");
+  assert.match(limitWithoutValue.stderr, /--limit needs its value/);
+
+  const flagEatingFlag = await runCliPush({ args: [...readable, "--token", "--dry-run"] });
+  assert.equal(flagEatingFlag.code, 1, "--token must not swallow the next flag as its value");
+  assert.match(flagEatingFlag.stderr, /--token needs its value/);
+
+  const equalsForm = await runCliPush({ args: [...readable, "--limit=2"] });
+  assert.equal(equalsForm.code, 1, "--limit=2 is not a spelling this command reads");
+  assert.match(equalsForm.stderr, /I do not understand "--limit=2"/);
 });

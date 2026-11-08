@@ -1355,9 +1355,11 @@ version cannot quietly start shipping transcript data into the database.
   database so the §7 ingest guards decide what survives: re-pushing everything cannot
   overwrite a newer snapshot or resurrect a tombstoned session. `--dry-run`, `--since
   <YYYY-MM-DD>`, and `--limit <n>` bound a first look; the endpoint and token default
-  to the same saved settings the extension reads. Exits 1 only when a send never
-  reached the server — a refusal is an answer, so an incognito session is printed with
-  the server's reason and the run still succeeds.
+  to the same saved settings the extension reads — an explicit flag wins over the
+  file, which wins over the environment, and `--token ""` is the deliberate "no
+  token". Exits 1 only when a send never reached the server: a refusal is an answer,
+  so an incognito session is printed with the server's reason and the run still
+  succeeds.
 - `npm run verify` — rescans from the current file state, then checks three things:
   session row count against the number of session files, grand-total cost against the
   sum freshly computed from the files, and each stored rollup against the sum of its own

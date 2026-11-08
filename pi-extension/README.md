@@ -110,8 +110,8 @@ node --experimental-strip-types pi-extension/cli-push.ts             # send it
 ```
 
 It reads that machine's own session files and sends them to the endpoint you already
-configured (`--url` and `--token` override; `--since YYYY-MM-DD` and `--limit n` bound a
-run). It goes through the ingest endpoint rather than the database on purpose, so the
+configured (`--url` and `--token` override the saved settings; `--since YYYY-MM-DD` and
+`--limit n` bound a run). It goes through the ingest endpoint rather than the database on purpose, so the
 server still decides what survives: re-pushing everything cannot overwrite a newer
 snapshot of a session and cannot bring back one you put in incognito. Refusals print
 with the server's reason and still exit 0 — the command exits 1 only when a report never

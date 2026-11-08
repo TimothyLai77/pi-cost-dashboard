@@ -19,7 +19,7 @@
  * rejected rather than ignored, because an ignored bound here means sending everything:
  *   --sessions-dir <dir>  default: PI_COST_SESSIONS_DIR, then Pi's settings.json, then ~/.pi/agent/sessions
  *   --url <url>           default: saved settings, then PI_COST_URL
- *   --token <token>       default: saved settings, then PI_COST_TOKEN
+ *   --token <token>       default: saved settings, then PI_COST_TOKEN (`--token ""` means "no token")
  *   --since <YYYY-MM-DD>  only sessions with activity on or after this date
  *   --limit <n>           send at most n sessions, newest activity first (default: all)
  *   --dry-run             aggregate and report; send nothing
@@ -38,20 +38,53 @@ const BARE_FLAGS = ["--dry-run"];
 
 const args = process.argv.slice(2);
 
-// An argument this command does not know is not a harmless typo: `--limit=50` would leave the
-// limit unset, and unset means "send the whole directory". Refuse the spelling instead.
-for (const arg of args) {
-  if (!arg.startsWith("--")) continue;
-  const [name, inlineValue] = [arg.split("=")[0], arg.includes("=")];
-  if (inlineValue || (!VALUE_FLAGS.includes(name) && !BARE_FLAGS.includes(name))) {
-    console.error(
-      `I do not understand "${arg}". Known flags: ${[...VALUE_FLAGS, ...BARE_FLAGS].join(", ")}. ` +
-        "Each takes its value as a separate word.",
-    );
-    process.exit(1);
-  }
-}
+/**
+ * Refuse the run with one line explaining why.
+ * @param {string} message
+ * @returns {never}
+ */
+const refuse = (message: string): never => {
+  console.error(message);
+  process.exit(1);
+};
 
+/**
+ * Reject argument spellings that would otherwise be quietly ignored.
+ *
+ * Both cases matter because this command's default is the most dangerous answer: an unknown
+ * `--limit=50` and a `--limit` with nothing after it both leave the limit unset, and unset
+ * means "send the entire directory".
+ *
+ * @returns {void}
+ */
+const rejectUnreadableArgs = () => {
+  const known = [...VALUE_FLAGS, ...BARE_FLAGS].join(", ");
+
+  args.forEach((arg, index) => {
+    if (!arg.startsWith("--")) return;
+
+    const name = arg.split("=")[0];
+    const isValueFlag = VALUE_FLAGS.includes(name);
+    const isBareFlag = BARE_FLAGS.includes(name);
+
+    if (arg.includes("=") || (!isValueFlag && !isBareFlag)) {
+      refuse(`I do not understand "${arg}". Known flags: ${known}. Each takes its value as a separate word.`);
+    }
+
+    const value = args[index + 1];
+    if (isValueFlag && (value === undefined || value.startsWith("--"))) {
+      refuse(`${name} needs its value as the next word, and that word has to be a value.`);
+    }
+  });
+};
+
+rejectUnreadableArgs();
+
+/**
+ * The value given for a flag, or undefined when the flag was not given.
+ * @param {string} name Flag name, including the leading dashes
+ * @returns {string | undefined}
+ */
 const flagValue = (name) => {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
@@ -80,30 +113,34 @@ const sessionsDir = resolveSessionsDir(
 );
 
 const saved = readSettings();
+const urlFlag = flagValue("--url");
+const tokenFlag = flagValue("--token");
+
+// `effectiveConfig` reads a saved key as a decision rather than a value — it tests
+// `"token" in saved` — so a `token: undefined` key does not fall through to PI_COST_TOKEN,
+// it means "saved: no token", and every report goes out unauthenticated. Only the flags that
+// were actually given are merged in; `--token ""` still means the deliberate "no token".
 const config = effectiveConfig(
   {
     ...saved,
-    url: flagValue("--url") ?? saved?.url,
-    token: flagValue("--token") ?? saved?.token,
+    ...(urlFlag === undefined ? {} : { url: urlFlag }),
+    ...(tokenFlag === undefined ? {} : { token: tokenFlag }),
   },
   process.env,
 );
 
 if (!config?.url) {
-  console.error("No endpoint configured. Run /pi-cost-settings in Pi, set PI_COST_URL, or pass --url.");
-  process.exit(1);
+  refuse("No endpoint configured. Run /pi-cost-settings in Pi, set PI_COST_URL, or pass --url.");
 }
 
 const since = flagValue("--since");
 if (since && !/^\d{4}-\d{2}-\d{2}$/.test(since)) {
-  console.error(`--since wants YYYY-MM-DD, got "${since}".`);
-  process.exit(1);
+  refuse(`--since wants YYYY-MM-DD, got "${since}".`);
 }
 const limitRaw = flagValue("--limit");
 const limit = limitRaw === undefined ? Infinity : Number(limitRaw);
 if (limitRaw !== undefined && (!Number.isInteger(limit) || limit < 1)) {
-  console.error(`--limit wants a positive whole number, got "${limitRaw}".`);
-  process.exit(1);
+  refuse(`--limit wants a positive whole number, got "${limitRaw}".`);
 }
 
 const files = listSessionFiles(sessionsDir);
