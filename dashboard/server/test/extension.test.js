@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer as createHttpServer } from "node:http";
@@ -34,6 +34,7 @@ process.env.HOME = fakeHome;
 process.on("exit", () => rmSync(fakeHome, { recursive: true, force: true }));
 
 const {
+  addPendingReport,
   buildPayload,
   buildSnapshot,
   buildTombstonePayload,
@@ -41,12 +42,17 @@ const {
   default: createExtension,
   effectiveConfig,
   maskSecret,
+  MAX_PENDING_REPORTS,
+  PENDING_GIVE_UP_AFTER,
   postBackground,
+  readPendingReports,
   readSettings,
   requestForProtocol,
   resolveSettingsAction,
   runSettingsAction,
   validateEndpoint,
+  worthRetrying,
+  writePendingReports,
   writeSettings,
 } = await import(extensionPath);
 
@@ -274,6 +280,7 @@ const configFor = (url, token = "test-token") => ({
   shutdownTimeoutMs: 2000,
   token: token || undefined,
   logFile: join(import.meta.dirname, "tmp-postbackground.log"),
+  pendingFile: join(import.meta.dirname, "tmp-postbackground-pending.json"),
 });
 
 test("postBackground delivers a payload over plain HTTP with the token header", async () => {
@@ -823,4 +830,252 @@ test("a tombstone round trip against the real app purges, blocks, and lifts", as
   } finally {
     await stop();
   }
+});
+
+/* ── Reports the server never took ───────────────────────────────────────────── */
+
+/**
+ * Run a block with the extension's home-derived paths pointed at a throwaway directory.
+ *
+ * The endpoint, the log, and the retry queue all hang off the Pi directory, which is resolved
+ * when a config is read rather than when the module loads, so HOME can be swapped back in for one
+ * test. Without this, a test that fails a report would write into the developer's own log.
+ *
+ * @param {(home: string) => Promise<void>} run
+ * @returns {Promise<void>}
+ */
+const withTempHome = async (run) => {
+  const home = mkdtempSync(join(tmpdir(), "pi-cost-extension-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    await run(home);
+  } finally {
+    process.env.HOME = saved;
+    rmSync(home, { recursive: true, force: true });
+  }
+};
+
+/** @returns {Promise<number>} a loopback port with nothing listening on it */
+const closedPort = async () => {
+  const probe = createHttpServer(() => {});
+  await new Promise((boot) => probe.listen(0, "127.0.0.1", boot));
+  const { port } = probe.address();
+  await new Promise((done) => probe.close(done));
+  return port;
+};
+
+/**
+ * Poll until `check` is true, because a report that is deliberately not awaited has to fail on
+ * its own schedule.
+ *
+ * @param {() => boolean} check
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+const until = async (check, timeoutMs = 3000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return true;
+    await new Promise((sleep) => setTimeout(sleep, 25));
+  }
+  return check();
+};
+
+/**
+ * A server that answers every request with a fixed status and body.
+ * @param {number} status
+ * @param {string | object} body
+ * @returns {Promise<{ url: string, stop: () => Promise<void> }>}
+ */
+const startAnsweringServer = async (status, body) => {
+  const server = createHttpServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(typeof body === "string" ? body : JSON.stringify(body));
+    });
+  });
+  await new Promise((boot) => server.listen(0, "127.0.0.1", boot));
+  return {
+    url: `http://127.0.0.1:${server.address().port}/api/ingest`,
+    stop: () => new Promise((done) => server.close(done)),
+  };
+};
+
+/**
+ * Put the environment a report needs in place and restore it afterwards.
+ * @param {{ url?: string, interval?: string }} values
+ * @param {() => Promise<void>} run
+ * @returns {Promise<void>}
+ */
+const withReportEnv = async (values, run) => {
+  const keys = Object.keys(values);
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) {
+      if (values[key] === undefined) delete process.env[key];
+      else process.env[key] = values[key];
+    }
+    await run();
+  } finally {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+};
+
+// Bounded so a report that never settles fails this test instead of hanging the whole file.
+test("postBackground says what the server answered, so a failure can be kept", { timeout: 15000 }, async () => {
+  /**
+   * @param {number} status
+   * @param {string | object} body
+   * @returns {Promise<object>}
+   */
+  const send = async (status, body) => {
+    const { url, stop } = await startAnsweringServer(status, body);
+    try {
+      return await postBackground(configFor(url), { sessionId: "session-under-test" });
+    } finally {
+      await stop();
+    }
+  };
+
+  assert.deepEqual(await send(201, { ok: true, applied: true }), {
+    ok: true,
+    status: 201,
+    applied: true,
+    error: null,
+  });
+
+  // A snapshot refused as stale is not an error: the server holds better numbers, so nothing is
+  // owed. Reading `applied` is what stops the queue retrying a report that already lost.
+  const stale = await send(200, { ok: true, applied: false });
+  assert.equal(stale.ok, true, "the server answered successfully");
+  assert.equal(stale.applied, false, "and kept the newer row");
+
+  const gateway = await send(502, "<html>Bad Gateway</html>");
+  assert.equal(gateway.ok, false);
+  assert.equal(gateway.status, 502);
+
+  const refused = await send(400, { error: "entryCount must be a number" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.status, 400);
+});
+
+test("a report nobody answered is worth retrying, one read and refused is not", async () => {
+  const outcome = await postBackground(configFor("not a url"), { sessionId: "session-under-test" });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.status, null, "no status, because there was no server");
+  assert.match(outcome.error, /not a valid endpoint/);
+
+  assert.equal(worthRetrying(null), true);
+  assert.equal(worthRetrying(502), true, "a server having a bad day may recover");
+  assert.equal(worthRetrying(400), false, "the same bytes get the same answer");
+});
+
+test("the queue keeps one entry per session, counts attempts, and then gives up", () => {
+  const first = addPendingReport([], { sessionId: "a", entryCount: 1 }, "2026-11-08T00:00:00.000Z");
+  assert.equal(first.entries.length, 1);
+  assert.equal(first.entries[0].attempts, 1);
+  assert.deepEqual(first.gaveUp, []);
+
+  // The same session settles again and fails again: the newest snapshot replaces the queued one,
+  // and the attempt count follows the session, which is the thing not getting through.
+  const second = addPendingReport(first.entries, { sessionId: "a", entryCount: 9 }, "2026-11-08T00:01:00.000Z");
+  assert.equal(second.entries.length, 1, "still one entry for the session");
+  assert.equal(second.entries[0].payload.entryCount, 9, "the newest snapshot is the one kept");
+  assert.equal(second.entries[0].attempts, 2);
+
+  let queue = second.entries;
+  const gaveUp = [];
+  for (let attempt = 3; attempt <= PENDING_GIVE_UP_AFTER; attempt += 1) {
+    const next = addPendingReport(queue, { sessionId: "a", entryCount: 10 }, "2026-11-08T00:02:00.000Z");
+    queue = next.entries;
+    gaveUp.push(...next.gaveUp);
+  }
+
+  assert.deepEqual(queue, [], "an exhausted session leaves the queue");
+  assert.equal(gaveUp.length, 1, "and it is reported exactly once, so it can be logged");
+  assert.equal(gaveUp[0].attempts, PENDING_GIVE_UP_AFTER);
+});
+
+test("the queue file is capped, owner-only, and gone once empty", () => {
+  const file = join(tmpdir(), `pi-cost-pending-${process.pid}-${Date.now()}.json`);
+  try {
+    const crowded = Array.from({ length: MAX_PENDING_REPORTS + 5 }, (unused, index) => ({
+      sessionId: `session-${index}`,
+      attempts: 1,
+      updatedAt: "2026-11-08T00:00:00.000Z",
+      payload: { sessionId: `session-${index}` },
+    }));
+    const { entries } = addPendingReport(crowded, { sessionId: "newest" }, "2026-11-08T00:00:01.000Z");
+    assert.equal(entries.length, MAX_PENDING_REPORTS, "the least recently touched make room");
+    assert.equal(entries[entries.length - 1].sessionId, "newest");
+
+    assert.equal(writePendingReports(file, entries), true);
+    assert.equal(statSync(file).mode & 0o777, 0o600, "the queue holds spending, like the token file");
+    assert.equal(readPendingReports(file).length, MAX_PENDING_REPORTS, "and reads back");
+
+    assert.equal(writePendingReports(file, []), true);
+    assert.equal(existsSync(file), false, "an empty queue leaves no file behind");
+
+    writeFileSync(file, "{ not json");
+    assert.deepEqual(readPendingReports(file), [], "a corrupt queue reads as empty rather than throwing");
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("a settled report the server never took is queued on the Pi box", async () => {
+  const url = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+
+  await withReportEnv({ PI_COST_URL: url, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+    await withTempHome(async (home) => {
+      const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+      const handlers = installExtension();
+
+      await handlers.get("agent_settled")(undefined, {
+        mode: "rpc",
+        sessionManager: fakeSessionManager("full-usage.jsonl"),
+      });
+
+      assert.ok(
+        await until(() => existsSync(pendingFile)),
+        "a report that reached nobody leaves a queue file",
+      );
+      const [entry] = readPendingReports(pendingFile);
+      assert.equal(
+        entry.sessionId,
+        buildSnapshot(fakeSessionManager("full-usage.jsonl")).sessionId,
+        "the queued report is this session's",
+      );
+      assert.equal(entry.attempts, 1, "the prompt that failed counts as the first attempt");
+      assert.equal(entry.payload.reportedBy, "agent_settled");
+    });
+  });
+});
+
+test("a report the server read and refused is not queued", async () => {
+  const { url, stop } = await startAnsweringServer(400, { error: "entryCount must be a number" });
+
+  await withReportEnv({ PI_COST_URL: url, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+    try {
+      await withTempHome(async (home) => {
+        const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+        const handlers = installExtension();
+
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+
+        await new Promise((wait) => setTimeout(wait, 400));
+        assert.equal(existsSync(pendingFile), false, "the same report gets the same answer twice");
+      });
+    } finally {
+      await stop();
+    }
+  });
 });

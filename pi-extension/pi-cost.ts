@@ -118,6 +118,8 @@ interface Config {
   shutdownTimeoutMs: number;
   token: string | undefined;
   logFile: string;
+  /** Reports the server never took, kept here so a later one can try them again. */
+  pendingFile: string;
   /** Where the endpoint came from, so /pi-cost-settings can say which one is in force. */
   source: "file" | "env";
 }
@@ -241,6 +243,7 @@ export const effectiveConfig = (
     shutdownTimeoutMs: number("PI_COST_SHUTDOWN_TIMEOUT_MS", 2000),
     token: token || undefined,
     logFile: join(homedir(), ".pi", "agent", "extensions", "pi-cost.log"),
+    pendingFile: join(homedir(), ".pi", "agent", "extensions", "pi-cost-pending.json"),
     source: saved?.url ? "file" : "env",
   };
 };
@@ -522,6 +525,21 @@ export const requestForProtocol = (protocol: string) =>
   protocol === "https:" ? httpsRequest : httpRequest;
 
 /**
+ * What a background send did.
+ *
+ * The report is still fire-and-forget — nobody awaits it — but the caller needs the answer to
+ * decide whether the snapshot is worth keeping for another attempt.
+ */
+export interface PostOutcome {
+  ok: boolean;
+  /** The HTTP status, or null when no answer came back at all. */
+  status: number | null;
+  /** False when the server said it already holds a fresher row. Still a success. */
+  applied: boolean;
+  error: string | null;
+}
+
+/**
  * Send a snapshot without blocking and without keeping the process alive.
  *
  * Uses node:http / node:https rather than fetch because the socket can be unref'd. Without
@@ -532,15 +550,15 @@ export const requestForProtocol = (protocol: string) =>
  *
  * @param {Config} config
  * @param {object} payload
- * @returns {Promise<void>} Resolves when the request finishes, never rejects
+ * @returns {Promise<PostOutcome>} Resolves when the request finishes, never rejects
  */
-export const postBackground = (config: Config, payload: object): Promise<void> =>
+export const postBackground = (config: Config, payload: object): Promise<PostOutcome> =>
   new Promise((resolve) => {
     let target: URL;
     try {
       target = new URL(config.url);
     } catch {
-      resolve();
+      resolve({ ok: false, status: null, applied: false, error: `not a valid endpoint: ${config.url}` });
       return;
     }
 
@@ -560,24 +578,189 @@ export const postBackground = (config: Config, payload: object): Promise<void> =
         timeout: config.timeoutMs,
       },
       (response) => {
-        // Drain the response so the socket can close, and ignore the status: a failed
-        // report is logged, not surfaced, because nobody asked for it.
-        response.resume();
-        response.on("end", () => resolve());
+        // The answer is one small JSON object, and its `applied` flag is worth reading: a
+        // server that already holds a fresher row has taken the report as surely as one that
+        // stored it, and neither is worth retrying.
+        const chunks: Buffer[] = [];
+        let size = 0;
+        response.on("data", (chunk: Buffer) => {
+          // Cap the read in case something in front of the server sends a page instead.
+          if (size < 4096) {
+            chunks.push(chunk);
+            size += chunk.length;
+          }
+        });
+        response.on("end", () => {
+          const text = Buffer.concat(chunks).toString("utf8");
+          let answered: Record<string, any> = {};
+          try {
+            answered = text ? (JSON.parse(text) as Record<string, any>) : {};
+          } catch {
+            // A proxy in front of the server answers a 502 with an HTML page, which is exactly
+            // what this machine's log shows. The status is the answer: an unreadable body must
+            // not swallow the outcome, or the promise this resolves never settles and every
+            // later report is blocked behind it.
+          }
+          const status = response.statusCode ?? null;
+          resolve({
+            ok: status !== null && status >= 200 && status < 300,
+            status,
+            applied: answered.applied !== false,
+            error: null,
+          });
+        });
       },
     );
 
     // The line that keeps Pi's exit fast: this request is not a reason to stay alive.
     req.on("socket", (socket) => socket.unref());
     req.on("timeout", () => req.destroy(new Error("request timeout")));
-    req.on("error", (error: Error) => {
-      logLine(config, `settled report failed: ${error.message}`);
-      resolve();
-    });
+    req.on("error", (error: Error) => resolve({ ok: false, status: null, applied: false, error: error.message }));
 
     req.write(body);
     req.end();
   });
+
+/**
+ * One report the server never took, kept on the Pi box for a later attempt.
+ *
+ * The payload is stored rather than a path to the session file: re-deriving a snapshot needs an
+ * aggregator, and this extension already builds the one payload shape that is legal on the wire.
+ * A queued snapshot that has since been overtaken is refused by the server's own entry-count
+ * guard, which is the correct outcome and costs one attempt.
+ */
+export interface PendingReport {
+  sessionId: string;
+  /** Attempts made so far, counting the one that put it here. */
+  attempts: number;
+  updatedAt: string;
+  payload: Record<string, any>;
+}
+
+/** Attempts a queued report gets before the extension gives up and logs it. @type {number} */
+export const PENDING_GIVE_UP_AFTER = 5;
+
+/** Queued reports kept at most; the least recently touched go first. @type {number} */
+export const MAX_PENDING_REPORTS = 20;
+
+/**
+ * Whether the server might take this report later.
+ *
+ * A 4xx is the server refusing the content, and sending the same bytes again cannot change the
+ * answer. A 5xx, or a request that never got an answer, is a server having a bad day.
+ *
+ * @param {number | null} status HTTP status, null when there was none
+ * @returns {boolean}
+ */
+export const worthRetrying = (status: number | null): boolean => status === null || status >= 500;
+
+/**
+ * Read the queue of undelivered reports.
+ *
+ * A missing file is the normal case. A corrupt one reads as empty, because the alternative is
+ * failing inside someone's session over state that only ever holds numbers.
+ *
+ * @param {string} file
+ * @returns {PendingReport[]}
+ */
+export const readPendingReports = (file: string): PendingReport[] => {
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(
+      (entry: any): entry is PendingReport =>
+        typeof entry?.sessionId === "string" &&
+        typeof entry?.attempts === "number" &&
+        entry?.payload !== null &&
+        typeof entry?.payload === "object",
+    );
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * Write the queue, owner-only like the settings file, and delete it when it empties.
+ *
+ * @param {string} file
+ * @param {PendingReport[]} entries
+ * @returns {boolean} false when the write failed, which the caller logs
+ */
+export const writePendingReports = (file: string, entries: PendingReport[]): boolean => {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    if (entries.length === 0) {
+      rmSync(file, { force: true });
+      return true;
+    }
+    writeFileSync(file, `${JSON.stringify(entries, null, 2)}\n`);
+    chmodSync(file, 0o600);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Fold one undeliverable snapshot into the queue.
+ *
+ * Newest wins per session, so a session that keeps settling keeps one entry rather than one per
+ * failed prompt. Attempts accumulate across those replacements: the queue tracks a session that
+ * is not getting through, not a series of unrelated reports.
+ *
+ * @param {PendingReport[]} entries The queue as it stands
+ * @param {Record<string, any>} payload The snapshot that could not be delivered
+ * @param {string} nowIso Timestamp for the entry
+ * @returns {{ entries: PendingReport[], gaveUp: PendingReport[] }} the new queue, and any entry
+ *   that has used its attempts and must be logged
+ */
+export const addPendingReport = (
+  entries: PendingReport[],
+  payload: Record<string, any>,
+  nowIso: string,
+): { entries: PendingReport[]; gaveUp: PendingReport[] } => {
+  const sessionId = String(payload.sessionId ?? "");
+  const attempts = (entries.find((entry) => entry.sessionId === sessionId)?.attempts ?? 0) + 1;
+  const others = entries.filter((entry) => entry.sessionId !== sessionId);
+
+  if (attempts >= PENDING_GIVE_UP_AFTER) {
+    return { entries: others, gaveUp: [{ sessionId, attempts, updatedAt: nowIso, payload }] };
+  }
+
+  const kept = [...others, { sessionId, attempts, updatedAt: nowIso, payload }];
+  return { entries: kept.slice(Math.max(0, kept.length - MAX_PENDING_REPORTS)), gaveUp: [] };
+};
+
+/** A report failure that knows the HTTP status it came from, when there was one. */
+type ReportFailure = Error & { status?: number | null };
+
+/**
+ * Fold an undelivered report into the queue file, and log anything that ran out of attempts.
+ *
+ * A 4xx is not queued: the server refused the content, and the same bytes will be refused
+ * again. A 5xx, a timeout, or a connection nobody answered is worth another try — that is the
+ * failure this machine's own log shows lasting for hours.
+ *
+ * @param {Config} config
+ * @param {Record<string, any>} payload The snapshot that did not get through
+ * @param {number | null} status HTTP status, null when there was none
+ * @returns {void}
+ */
+const keepForRetry = (config: Config, payload: Record<string, any>, status: number | null): void => {
+  if (!worthRetrying(status)) return;
+
+  const { entries, gaveUp } = addPendingReport(
+    readPendingReports(config.pendingFile),
+    payload,
+    new Date().toISOString(),
+  );
+  if (!writePendingReports(config.pendingFile, entries)) {
+    logLine(config, `could not queue the report for later: ${config.pendingFile}`);
+  }
+  for (const dropped of gaveUp) {
+    logLine(config, `gave up on session ${dropped.sessionId} after ${dropped.attempts} attempts`);
+  }
+};
 
 /**
  * The dialog methods the settings command needs, as Pi's UI context provides them.
@@ -977,7 +1160,13 @@ export default function (pi: ExtensionAPI) {
     });
     const body = await response.json().catch(() => ({})) as Record<string, any>;
     if (!response.ok) {
-      throw new Error(`${response.status}: ${body.detail ?? body.error ?? response.statusText}`);
+      // The status rides along, because a caller has to tell "the server refused this report"
+      // from "the server was not there": only the second is worth queueing for later.
+      const failure = new Error(
+        `${response.status}: ${body.detail ?? body.error ?? response.statusText}`,
+      ) as ReportFailure;
+      failure.status = response.status;
+      throw failure;
     }
     return body;
   };
@@ -1155,8 +1344,11 @@ export default function (pi: ExtensionAPI) {
     // postBackground also unrefs its socket, so the request is not a reason for Pi to stay
     // alive, and it resolves rather than rejecting: an unawaited rejection would be an
     // unhandled rejection, and this process is Pi's, not ours.
-    inFlight = postBackground(active, payload).then(() => {
+    inFlight = postBackground(active, payload).then((outcome) => {
       inFlight = null;
+      if (outcome.ok) return;
+      logLine(active, `settled report failed: ${outcome.error ?? `HTTP ${outcome.status}`}`);
+      keepForRetry(active, payload as Record<string, any>, outcome.status);
     });
   });
 
@@ -1164,6 +1356,7 @@ export default function (pi: ExtensionAPI) {
     const active = config;
     if (!active || !active.autoEnabled || disabledForSession) return;
 
+    let payload: Record<string, any> | null = null;
     try {
       const snapshot = buildSnapshot(ctx.sessionManager);
       if (!snapshot) return;
@@ -1171,12 +1364,18 @@ export default function (pi: ExtensionAPI) {
       if (incognitoSessions.has(snapshot.sessionId)) return;
       if (snapshot.costMicros === 0 && snapshot.totalTokens === 0) return;
 
+      payload = buildPayload(snapshot, "shutdown");
+
       // Awaiting here is required: process exit kills in-flight requests. Nothing is
       // blocked, because there are no prompts left after shutdown. The timeout is short
       // so quitting Pi stays responsive when the server is down.
-      await post(active, buildPayload(snapshot, "shutdown"), active.shutdownTimeoutMs);
+      await post(active, payload, active.shutdownTimeoutMs);
     } catch (error) {
-      logLine(active, `shutdown report failed: ${(error as Error).message}`);
+      const failure = error as ReportFailure;
+      logLine(active, `shutdown report failed: ${failure.message}`);
+      // The last report of a session is the one that matters most, and Pi is about to be gone:
+      // this is what the queue is for.
+      if (payload) keepForRetry(active, payload, failure.status ?? null);
     }
   });
 }
