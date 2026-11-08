@@ -53,7 +53,13 @@ export const listSessionFiles = (sessionsDir) => {
       } else if (entry.name.endsWith(".jsonl")) files.push(fullPath);
     }
   };
-  walk(sessionsDir);
+  // One unreadable subdirectory (a permission bit flipped by hand) must not cost the
+  // whole pass: keep what the walk found and carry on.
+  try {
+    walk(sessionsDir);
+  } catch (error) {
+    console.warn(`scan: could not read ${sessionsDir} fully: ${error?.message ?? error}`);
+  }
   return files;
 };
 
@@ -103,11 +109,18 @@ const markScanned = (db, filePath, sessionId) => {
  * Incognito tombstones are skipped: nothing is stored for the file, but its (mtime, size)
  * pair is recorded, so warm scans keep skipping it instead of re-parsing every pass.
  *
+ * One file can never take the scan down with it. Aggregation, the upsert, and the state
+ * write run inside a per-file transaction and any throw is counted as `failed` and
+ * logged, because one colliding or unreadable file — the same session stored under two
+ * paths, a directory remount, a file deleted mid-read — used to abort the whole pass and
+ * roll back every file already written in it.
+ *
  * @param {string} sessionsDir Absolute path to the Pi sessions directory
  * @param {import("better-sqlite3").Database} db
  * @param {{ force?: boolean }} [options] force rescans every file, ignoring the cache
  * @returns {{ scanned: number, skipped: number, updated: number, deleted: number,
- *             rejected: number, tombstoned: number, files: number, ms: number, skippedLines: number }}
+ *             rejected: number, tombstoned: number, failed: number, files: number,
+ *             ms: number, skippedLines: number }}
  */
 export const scanSessions = (sessionsDir, db, options = {}) => {
   const startedAt = performance.now();
@@ -118,6 +131,7 @@ export const scanSessions = (sessionsDir, db, options = {}) => {
   let updated = 0;
   let rejected = 0;
   let tombstoned = 0;
+  let failed = 0;
   let skippedLines = 0;
 
   for (const filePath of files) {
@@ -126,26 +140,38 @@ export const scanSessions = (sessionsDir, db, options = {}) => {
       continue;
     }
 
-    const { session, events, skippedLines: skippedInFile } = aggregateSession(filePath);
     scanned += 1;
-    skippedLines += skippedInFile;
+    try {
+      // better-sqlite3 transactions must be function bodies, so the reading and the
+      // writing are collected here and the whole file lands or rolls back as one unit.
+      const writeFile = db.transaction(() => {
+        const { session, events, skippedLines: skippedInFile } = aggregateSession(filePath);
+        skippedLines += skippedInFile;
 
-    // A file with no header is not a session we can key, so record it and move on.
-    if (!session.sessionId) {
-      rejected += 1;
-      continue;
+        // A file with no header is not a session we can key, so record it and move on.
+        if (!session.sessionId) {
+          rejected += 1;
+          return;
+        }
+
+        // Incognito: mark the file scanned so warm passes skip it, and store nothing.
+        if (isExcluded(db, session.sessionId)) {
+          tombstoned += 1;
+          markScanned(db, filePath, session.sessionId);
+          return;
+        }
+
+        if (upsertSession(db, session, events, "scan")) updated += 1;
+
+        markScanned(db, filePath, session.sessionId);
+      });
+      writeFile();
+    } catch (error) {
+      // The transaction rolled this file back on its own; the counter and the log line
+      // are all the rest of the scan needs to keep going.
+      failed += 1;
+      console.warn(`scan: skipping ${filePath}: ${error?.message ?? error}`);
     }
-
-    // Incognito: mark the file scanned so warm passes skip it, and store nothing.
-    if (isExcluded(db, session.sessionId)) {
-      tombstoned += 1;
-      markScanned(db, filePath, session.sessionId);
-      continue;
-    }
-
-    if (upsertSession(db, session, events, "scan")) updated += 1;
-
-    markScanned(db, filePath, session.sessionId);
   }
 
   const knownFiles = new Set(files);
@@ -169,6 +195,7 @@ export const scanSessions = (sessionsDir, db, options = {}) => {
     deleted: missing.length,
     rejected,
     tombstoned,
+    failed,
     files: files.length,
     skippedLines,
     ms: Math.round(performance.now() - startedAt),

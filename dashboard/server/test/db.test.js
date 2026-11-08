@@ -24,6 +24,38 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "fixtures");
 
 /**
+ * A minimal rollup for a session that is not in any fixture, so a test can put a
+ * foreign session_id on a chosen file path and stage a unique-key collision.
+ * @param {string} sessionFile The path the foreign session claims
+ * @returns {object} An upsertSession-shaped session
+ */
+const foreignSession = (sessionFile) => ({
+  sessionId: "99999999-9999-4999-8999-999999999999",
+  sessionFile,
+  parentSessionId: null,
+  cwd: "/home/user/other-project",
+  name: null,
+  startedAt: "2026-01-01T00:00:00.000Z",
+  lastActivityAt: "2026-01-01T00:00:00.000Z",
+  entryCount: 1,
+  costMicros: 0,
+  costInputMicros: 0,
+  costOutputMicros: 0,
+  costCacheReadMicros: 0,
+  costCacheWriteMicros: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  totalTokens: 0,
+  userMessages: 0,
+  assistantMessages: 0,
+  toolCalls: 0,
+  toolResults: 0,
+  totalMessages: 0,
+});
+
+/**
  * A migrated in-memory database.
  * @returns {import("better-sqlite3").Database}
  */
@@ -420,6 +452,46 @@ test("a file with no session header is rejected, not stored", () => {
     assert.equal(result.updated, 0);
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sessions").get().n, 0);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+    db.close();
+  }
+});
+
+test("a file colliding with a stored row fails alone, not the whole scan", () => {
+  const db = migratedDb();
+  const dir = mkdtempSync(join(tmpdir(), "pi-cost-scan-"));
+  const log = console.warn;
+  try {
+    // A row already claims this file path under another session id — a file restored
+    // or re-run under a name another session was stored from. The scanner now wants
+    // the same session_file for a second session_id, which violates its unique key.
+    // Before the per-file guard this throw aborted the pass and rolled back every
+    // file already written in it.
+    const target = join(dir, "session-a.jsonl");
+    copyFileSync(join(fixturesDir, "full-usage.jsonl"), target);
+    upsertSession(db, foreignSession(target), [], "push");
+
+    copyFileSync(join(fixturesDir, "usage-only.jsonl"), join(dir, "session-b.jsonl"));
+
+    console.warn = () => {}; // the guard logs the skipped file; keep the test output clean
+    const result = scanSessions(dir, db);
+    console.warn = log;
+
+    assert.equal(result.failed, 1, "the colliding file is counted, not fatal");
+    assert.equal(result.updated, 1, "the good file was still written");
+
+    const foreign = db
+      .prepare("SELECT session_file FROM sessions WHERE session_id = ?")
+      .get("99999999-9999-4999-8999-999999999999");
+    assert.equal(foreign.session_file, target, "the colliding row was left whole");
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sessions").get().n, 2, "the foreign row and the good file are both stored");
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM usage_events").get().n,
+      2,
+      "the good file's facts landed while the colliding file's rolled back",
+    );
+  } finally {
+    console.warn = log;
     rmSync(dir, { recursive: true, force: true });
     db.close();
   }

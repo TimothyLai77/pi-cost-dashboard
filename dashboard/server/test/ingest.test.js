@@ -128,6 +128,56 @@ test("a scan overwrites a provisional push", () => {
   db.close();
 });
 
+test("a payload colliding with a stored row is refused 409, not a 500", () => {
+  const db = freshDb();
+  const payload = validPayload();
+
+  // A foreign session already owns the file path this payload reports — the shape a
+  // restored or relocated file leaves behind. Sessions key on both session_id and
+  // session_file, so the push passes validation and then violates the other unique
+  // key; the old code escaped as a raw 500 echoing SQLite's wording.
+  const foreign = {
+    sessionId: "99999999-9999-4999-8999-999999999999",
+    sessionFile: payload.sessionFile,
+    parentSessionId: null,
+    cwd: "/home/user/other-project",
+    name: null,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    lastActivityAt: "2026-01-01T00:00:00.000Z",
+    entryCount: 1,
+    costMicros: 0,
+    costInputMicros: 0,
+    costOutputMicros: 0,
+    costCacheReadMicros: 0,
+    costCacheWriteMicros: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    totalTokens: 0,
+    userMessages: 0,
+    assistantMessages: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    totalMessages: 0,
+  };
+  upsertSession(db, foreign, [], "push");
+
+  const response = ingestSession(db, payload);
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.error, "stored_row_conflict");
+  assert.match(response.body.detail, /UNIQUE/i);
+
+  assert.equal(
+    db.prepare("SELECT session_id FROM sessions").get().session_id,
+    foreign.sessionId,
+    "the stored row is untouched by the refused push",
+  );
+  db.close();
+});
+
 test("the contract file and the hand-written validator accept the same fields", () => {
   const contract = JSON.parse(
     readFileSync(join(import.meta.dirname, "..", "..", "..", "pi-extension", "payload.schema.json"), "utf8"),

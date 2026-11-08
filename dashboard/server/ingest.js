@@ -446,6 +446,11 @@ export const ingestTombstone = (db, body) => {
  * false, so the extension does not retry in a loop. A schema-version-3 body routes to
  * the tombstone path instead of the snapshot path.
  *
+ * A payload that passes validation but collides with what is already stored — the same
+ * session under two file paths, since both columns are unique keys — used to escape as a
+ * raw 500 echoing SQLite's wording. It is answered 409 with the offending key instead;
+ * a 409 the client can read beats a server error it cannot.
+ *
  * @param {import("better-sqlite3").Database} db
  * @param {any} body Parsed request body
  * @returns {{ status: number, body: object }} HTTP status and response body
@@ -459,7 +464,22 @@ export const ingestSession = (db, body) => {
   if (!validated.ok) return { status: validated.status, body: validated };
 
   const { session, events } = payloadToRecord(validated.payload);
-  const applied = upsertSession(db, session, events, "push");
+
+  let applied;
+  try {
+    applied = upsertSession(db, session, events, "push");
+  } catch (error) {
+    // A validated payload can still collide with a stored row: sessions keys on both
+    // session_id and session_file, so the same session reported from a moved or copied
+    // file path violates the other unique key. The transaction rolled back on its own.
+    if (String(error?.code ?? "").startsWith("SQLITE_CONSTRAINT")) {
+      return {
+        status: 409,
+        body: { ok: false, error: "stored_row_conflict", detail: error.message },
+      };
+    }
+    throw error;
+  }
 
   // A refused write on a tombstoned id is incognito, not staleness. Say so, so a
   // non-incognito extension version pushing to a tombstoned session logs the real reason.
