@@ -34,7 +34,7 @@ import {
   getSessions,
   getLifetimeStats,
   getSummary,
-} from "./queries.js";
+} from "./queries/index.js";
 import { isSupportedTimeZone, offsetLabel, utcOffsetMinutes } from "./timezone.js";
 import { resolveSessionsDir, scanSessions, scannerStatus } from "./scanner/scan.js";
 
@@ -103,11 +103,22 @@ const flagParam = (name, fallback) => (req, res, next) => {
 };
 
 /**
- * Validate a YYYY-MM-DD date string.
- * @param {unknown} rawValue
- * @returns {boolean}
+ * Validate a `YYYY-MM-DD` date the calendar actually has.
+ *
+ * Matching the shape is not enough. `2026-13-45` and `2026-02-31` are ten characters of the
+ * right pattern, and once past this edge they are read as instants by the timezone helpers,
+ * which answer either a thrown `RangeError` — a 500 for what is a typo — or, in a UTC-configured
+ * server, a filter on a day that never happened, which answers 200 with an empty chart.
+ * So the value is parsed and required to name back the same day it was written as.
+ *
+ * @param {unknown} rawValue Value from a query parameter
+ * @returns {boolean} true only for a real calendar day in `YYYY-MM-DD` form
  */
-const isIsoDate = (rawValue) => typeof rawValue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawValue);
+const isIsoDate = (rawValue) => {
+  if (typeof rawValue !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) return false;
+  const parsed = new Date(`${rawValue}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === rawValue;
+};
 
 /**
  * Express middleware that rejects a malformed integer parameter.
