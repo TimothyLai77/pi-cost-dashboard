@@ -78,7 +78,12 @@
         "outputTokens",
         "cacheReadTokens",
         "cacheWriteTokens",
-        "totalTokens"
+        "totalTokens",
+        "userMessages",
+        "assistantMessages",
+        "toolCalls",
+        "toolResults",
+        "totalMessages"
       ],
       "properties": {
         "costMicros": { "type": "integer", "minimum": 0, "description": "US dollars times 1e6, rounded once per entry." },

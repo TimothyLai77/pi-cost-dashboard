@@ -546,7 +546,9 @@ Notes:
   to its own `costMicros`, and per session to the split its events report. Version 1 is
   rejected outright: the server accepts 2 only, which means the extension and the server
   deploy together, and a Pi still on the older extension stops reporting until it is updated
-  (file scanning is unaffected).
+  (file scanning is unaffected). The five message counters are required in `totals` like the
+  cost keys: one missing is refused by name at validation, never defaulted to zero — a client
+  that counts but does not send must fail loudly rather than store a confident zero (issue #13).
 
 ### Validation on ingest
 

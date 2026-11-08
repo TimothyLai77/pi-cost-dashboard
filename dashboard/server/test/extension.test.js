@@ -92,6 +92,14 @@ test("the extension's totals match the server's own aggregation", () => {
     assert.equal(snapshot.totalTokens, fromFile.session.totalTokens, `${fixture} tokens`);
     assert.equal(snapshot.entryCount, fromFile.session.entryCount, `${fixture} entries`);
     assert.equal(snapshot.facts.length, fromFile.events.length, `${fixture} fact count`);
+
+    // The message counters ride the same seam: an extension that counts them but does not
+    // carry them onto the snapshot leaves ingest to store zeros (issue #13).
+    assert.equal(snapshot.userMessages, fromFile.session.userMessages, `${fixture} userMessages`);
+    assert.equal(snapshot.assistantMessages, fromFile.session.assistantMessages, `${fixture} assistantMessages`);
+    assert.equal(snapshot.toolCalls, fromFile.session.toolCalls, `${fixture} toolCalls`);
+    assert.equal(snapshot.toolResults, fromFile.session.toolResults, `${fixture} toolResults`);
+    assert.equal(snapshot.totalMessages, fromFile.session.totalMessages, `${fixture} totalMessages`);
   }
 });
 
@@ -104,6 +112,11 @@ test("the server accepts the extension's payload", () => {
   assert.equal(payload.schemaVersion, 2);
   assert.equal(payload.reportedBy, "agent_settled");
   assert.equal(payload.totals.costMicros, 19250);
+
+  // The counters have to survive the snapshot-to-payload hop, not just exist on the snapshot.
+  for (const key of ["userMessages", "assistantMessages", "toolCalls", "toolResults", "totalMessages"]) {
+    assert.equal(payload.totals[key], snapshot[key], `totals.${key}`);
+  }
 });
 
 test("the extension reports the cost of a call in the four parts it bills", () => {
