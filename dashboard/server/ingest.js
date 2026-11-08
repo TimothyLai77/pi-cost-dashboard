@@ -12,9 +12,11 @@
  *   - `totals` must match the sum of `events`. A broken client is refused rather than
  *     trusted with a number the dashboard would display as fact.
  *
- * The third kind of check is new in version 2: the four cost components must add up to the
- * total they are reported next to, per event and per session. Version 2 is the only version
- * accepted for snapshots, and it requires all four, so every stored row has a split.
+ * The third kind of check is new in version 2: where a client reports a split, the four cost
+ * components must add up to what they are reported against — an event's parts to its own
+ * total, a session's parts to the parts its events report. A split that is entirely zero
+ * beside a real cost is an unknown split rather than a broken client — some providers bill
+ * only a whole — and the whole session is not lost over it. DESIGN.md §4 owns why.
  *
  * Version 3 is a second payload shape, not a snapshot revision: the incognito tombstone.
  * It carries a session UUID and a boolean, routes around every snapshot check, and
@@ -255,6 +257,7 @@ export const validateIngestPayload = (body) => {
 
   let eventCostMicros = 0;
   let eventTotalTokens = 0;
+  let eventComponentsTotal = 0;
 
   for (const [index, event] of body.events.entries()) {
     if (event === null || typeof event !== "object" || Array.isArray(event)) {
@@ -287,7 +290,9 @@ export const validateIngestPayload = (body) => {
       if (!isCount(event[key])) return reject(`events[${index}].${key}`, "must be a non-negative integer");
     }
     const eventComponents = COST_COMPONENT_KEYS.reduce((sum, key) => sum + event[key], 0);
-    if (Math.abs(eventComponents - event.costMicros) > componentTolerance(1)) {
+    // Zero parts beside a real cost means the provider billed a whole with no split to read
+    // (DESIGN.md §4). A non-zero split that disagrees with its total is still a broken client.
+    if (eventComponents > 0 && Math.abs(eventComponents - event.costMicros) > componentTolerance(1)) {
       return reject(
         `events[${index}].costMicros`,
         `cost components must add up to costMicros (components sum to ${eventComponents})`,
@@ -300,6 +305,7 @@ export const validateIngestPayload = (body) => {
     }
     eventCostMicros += event.costMicros;
     eventTotalTokens += event.totalTokens ?? 0;
+    eventComponentsTotal += eventComponents;
   }
 
   // Totals must agree with the facts, within a rounding allowance. Two independent
@@ -314,14 +320,15 @@ export const validateIngestPayload = (body) => {
     return reject("totals.totalTokens", `must match the sum of events (${eventTotalTokens})`);
   }
 
-  // The parts are checked against the whole at both levels: an event whose components do
-  // not add up to its own cost is a broken client, and so is a session total whose
-  // components do not add up to it.
+  // A session's split is held to the same sum-of-events rule as its cost and tokens, rather
+  // than to its own whole: an event that reports no split leaves its cost out of the split at
+  // both levels, which is what keeps one unattributed call from refusing the whole session.
+  // A session that reports no split at all passes by the same arithmetic, 0 against 0.
   const totalsComponents = COST_COMPONENT_KEYS.reduce((sum, key) => sum + totals[key], 0);
-  if (Math.abs(totalsComponents - totals.costMicros) > componentTolerance(body.events.length)) {
+  if (Math.abs(totalsComponents - eventComponentsTotal) > componentTolerance(body.events.length)) {
     return reject(
       "totals.costMicros",
-      `cost components must add up to costMicros (components sum to ${totalsComponents})`,
+      `cost components must add up to the components its events report (components sum to ${totalsComponents}, events report ${eventComponentsTotal})`,
     );
   }
 

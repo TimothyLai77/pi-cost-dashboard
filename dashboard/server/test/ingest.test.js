@@ -255,7 +255,37 @@ test("cost components that do not add up to the cost are refused", () => {
   });
   assert.equal(paddedTotals.ok, false);
   assert.equal(paddedTotals.field, "totals.costMicros");
-  assert.match(paddedTotals.reason, /cost components must add up to costMicros/);
+  assert.match(paddedTotals.reason, /cost components must add up to the components its events report/);
+
+  // A session's split is held to its events' split, so a session that reports parts beside an
+  // event that reports none is still caught — the short split has to be explained by unsplit
+  // events, not by a client making numbers up.
+  const oneEventUnsplitButTotalsNot = {
+    ...payload,
+    events: [
+      { ...payload.events[0], costInputMicros: 0, costOutputMicros: 0, costCacheReadMicros: 0, costCacheWriteMicros: 0 },
+      ...payload.events.slice(1),
+    ],
+  };
+  const shortTotals = validateIngestPayload(oneEventUnsplitButTotalsNot);
+  assert.equal(shortTotals.ok, false, "the totals the client derived no longer match its events");
+  assert.equal(shortTotals.field, "totals.costMicros");
+
+  // Zeroing the session's split while its events report one is a client inventing its rollup,
+  // not a provider that bills in wholes: an absent split at session level has to be explained
+  // by absent splits at event level.
+  const zeroedTotals = validateIngestPayload({
+    ...payload,
+    totals: {
+      ...payload.totals,
+      costInputMicros: 0,
+      costOutputMicros: 0,
+      costCacheReadMicros: 0,
+      costCacheWriteMicros: 0,
+    },
+  });
+  assert.equal(zeroedTotals.ok, false, "a session split of zero against events that report parts");
+  assert.equal(zeroedTotals.field, "totals.costMicros");
 
   // Each component is rounded on its own, so a session's parts can land a couple of
   // micro-dollars away from its whole. That much is allowed; a client that is off by a
@@ -265,6 +295,77 @@ test("cost components that do not add up to the cost are refused", () => {
     totals: { ...payload.totals, costInputMicros: payload.totals.costInputMicros + 2 },
   });
   assert.equal(rounded.ok, true);
+});
+
+// Why this is accepted rather than refused: a real session of 371 events carried 25 subagent
+// calls from a custom provider that Pi bills only as a whole — a total with all four parts
+// zero. The split check refused the entire payload, so the session's dashboard row froze while
+// its cost kept climbing. Losing a whole session's spend to defend a bar chart is the wrong
+// trade; see DESIGN.md §4.
+test("a cost billed without a split is accepted, at both levels", () => {
+  const payload = validPayload();
+
+  /**
+   * Strip the reported split from the first `count` events and re-derive the session split
+   * from what is left, which is exactly what an honest client does.
+   * @param {number} count
+   * @returns {object} a payload shaped like the extension's
+   */
+  const withUnsplitEvents = (count) => {
+    const events = payload.events.map((event, index) =>
+      index < count
+        ? { ...event, costInputMicros: 0, costOutputMicros: 0, costCacheReadMicros: 0, costCacheWriteMicros: 0 }
+        : event,
+    );
+    const partOf = (key) => events.reduce((sum, event) => sum + event[key], 0);
+    return {
+      ...payload,
+      events,
+      totals: {
+        ...payload.totals,
+        costInputMicros: partOf("costInputMicros"),
+        costOutputMicros: partOf("costOutputMicros"),
+        costCacheReadMicros: partOf("costCacheReadMicros"),
+        costCacheWriteMicros: partOf("costCacheWriteMicros"),
+      },
+    };
+  };
+
+  const oneUnsplit = withUnsplitEvents(1);
+  assert.equal(validateIngestPayload(oneUnsplit).ok, true, "one event billed as a whole is allowed");
+
+  const everyEventUnsplit = withUnsplitEvents(payload.events.length);
+  assert.equal(
+    validateIngestPayload(everyEventUnsplit).ok,
+    true,
+    "a provider that never reports a split is allowed too",
+  );
+
+  const db = freshDb();
+  const response = ingestSession(db, oneUnsplit);
+  assert.equal(response.status, 201, JSON.stringify(response.body));
+
+  const stored = db
+    .prepare(
+      `SELECT cost_micros, cost_input_micros, cost_output_micros, cost_cache_read_micros, cost_cache_write_micros
+       FROM sessions`,
+    )
+    .get();
+  const partsSum =
+    stored.cost_input_micros + stored.cost_output_micros + stored.cost_cache_read_micros + stored.cost_cache_write_micros;
+
+  assert.equal(stored.cost_micros, oneUnsplit.totals.costMicros, "the whole is stored, because the whole is what was billed");
+  assert.ok(partsSum < stored.cost_micros, "and the split is knowingly short of it");
+
+  const facts = db
+    .prepare("SELECT cost_micros, cost_input_micros FROM usage_events ORDER BY occurred_at")
+    .all();
+  assert.equal(
+    facts.reduce((sum, fact) => sum + fact.cost_micros, 0),
+    stored.cost_micros,
+    "the events still add up to the session, so `npm run verify` stays honest about the money",
+  );
+  db.close();
 });
 
 test("a missing required field is refused with the field named", () => {
