@@ -1265,13 +1265,19 @@ export const getFilters = (db) => ({
 });
 
 /**
- * Operator sanity check: is the scanner keeping up with the files?
+ * Operator sanity check: what is in the database, and can the scanner see any files at all?
+ *
+ * `scanner` comes from `scannerStatus()` in the scanner module. It is passed in rather than
+ * worked out here because "not looked" and "looked, found none" are different answers, and only
+ * the caller knows which one it has.
+ *
  * @param {import("better-sqlite3").Database} db
- * @param {string} sessionsDir
- * @param {number} [fileCount] Files currently on disk, when already known
+ * @param {string} sessionsDir The directory the scanner was told to read
+ * @param {{ enabled?: boolean, reason?: string | null, fileCount?: number | null }} [scanner]
  * @returns {object}
  */
-export const getHealth = (db, sessionsDir, fileCount) => {
+export const getHealth = (db, sessionsDir, scanner) => {
+  const state = scanner ?? { enabled: false, reason: "scanner state unavailable", fileCount: null };
   const schemaVersion = db
     .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_meta")
     .get().version;
@@ -1286,10 +1292,11 @@ export const getHealth = (db, sessionsDir, fileCount) => {
     status: "ok",
     dbPath: db.name,
     sessionsDir,
+    scanner: { enabled: state.enabled ?? false, reason: state.reason ?? null },
     schemaVersion,
     sessionCount: sessions,
     usageEventCount: events,
-    sessionFilesOnDisk: fileCount ?? null,
+    sessionFilesOnDisk: state.fileCount ?? null,
     lastScanAt: lastScan,
     ...money(totals.cost_micros),
   };

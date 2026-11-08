@@ -64,6 +64,24 @@ export const listSessionFiles = (sessionsDir) => {
 };
 
 /**
+ * Describe what the directory scanner can actually see, for `/api/health`.
+ *
+ * A push-fed deployment points `PI_COST_SESSIONS_DIR` at a directory that does not exist, and
+ * that is a scanner with nothing to read, not a broken one. Every scanner field used to answer
+ * `null` either way, so an operator could not tell the two apart; now the response says which
+ * world it is in, and counts files whenever counting is possible.
+ *
+ * @param {string} sessionsDir Absolute directory path the scanner was told to read
+ * @returns {{ enabled: boolean, reason: string | null, fileCount: number | null }}
+ */
+export const scannerStatus = (sessionsDir) => {
+  if (!existsSync(sessionsDir)) {
+    return { enabled: false, reason: "sessions directory not found", fileCount: null };
+  }
+  return { enabled: true, reason: null, fileCount: listSessionFiles(sessionsDir).length };
+};
+
+/**
  * Decide whether a file needs re-parsing.
  * @param {import("better-sqlite3").Database} db
  * @param {string} filePath

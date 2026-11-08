@@ -196,8 +196,10 @@ feeds.
 
 Two independent paths reach the same tables:
 
-- **Scanner** reads the session directory. It is the source of truth and the
-  backfill for all pre-existing history.
+- **Scanner** reads the session directory. Where the server can see that
+  directory, it is the source of truth and the backfill for all pre-existing
+  history; where it cannot — the container in §14 mounts no session files — it
+  contributes nothing and the ledger is push-only.
 - **Push** is Pi telling the server about the session it is running right now,
   which a directory scan cannot know about until the file is written.
 
@@ -610,7 +612,13 @@ because subagents are not used on this machine, so the page always takes the def
 parameter and its validation stay, tested server-side.
 
 `/api/health` is the operator's sanity check: if `sessionCount` stops tracking
-the file count, the scanner is broken.
+`sessionFilesOnDisk`, the scanner is broken. In a push-only deployment there are no
+files to track, and it says so instead of reporting an empty scan as a healthy one:
+`scanner.enabled` is false with a `scanner.reason` naming the missing directory, and
+`sessionFilesOnDisk` is `null` — "nothing to count" — rather than the reassuring zero
+that a working scanner with an empty directory answers. Read together with `sessionsDir`
+it distinguishes the two failures an operator actually has to tell apart: a scanner
+that cannot see the files, and one that sees them and is not keeping up.
 
 `/api/hourly` answers the drill-down question: which hours of a day actually cost
 money. It takes one `day` in the same frame the daily chart labelled it, applies the
@@ -862,8 +870,10 @@ Both are handled: the background request is built with `node:http` (or `node:htt
 `https:` URL) so its socket can be `unref()`'d, which is not available through `fetch`; and
 the automatic report names the modes that must stay silent —
 `ctx.mode === "print" || ctx.mode === "json"` — rather than the one allowed to speak. A
-one-shot run has no prompts to protect, and in a deployment that scans session files the
-scanner reads its file seconds later, so skipping its report loses nothing. The modes that do
+one-shot run has no prompts to protect. Where a scan can see the session files, its report
+loses nothing anyway: the scan reads the file seconds later. In a push-only deployment that
+is not true, and the skipped report is the difference between the session appearing at exit
+and never appearing at all — see "Reports that did not land" below. The modes that do
 report are the two that keep prompting: `tui` in a terminal, and `rpc` in anything running Pi
 in-process — ThinkRail and the other host-driven clients — so a live session shows up while it
 is still running instead of only when it exits. The guard used to be `ctx.mode === "tui"`,
@@ -881,7 +891,7 @@ self-signed localhost certificate, so the handshake is exercised rather than ass
 ```ts
 pi.on("agent_settled", async (_event, ctx) => {
   if (!config.autoEnabled || disabledForSession) return;
-  if (ctx.mode === "print" || ctx.mode === "json") return;  // one-shot runs: the scanner covers them
+  if (ctx.mode === "print" || ctx.mode === "json") return;  // one-shot runs: exit would wait
   if (Date.now() - lastReportMs < config.minIntervalMs) return;
   if (inFlight) return;                              // coalesce: one request outstanding
 
@@ -892,8 +902,15 @@ pi.on("agent_settled", async (_event, ctx) => {
   lastReportMs = Date.now();
   // Not awaited. postBackground also unrefs the socket and resolves rather than
   // rejecting, so this can neither stall the prompt nor keep the process alive.
-  inFlight = postBackground(config, buildPayload(snapshot, "agent_settled"))
-    .then(() => { inFlight = null; });
+  const payload = buildPayload(snapshot, "agent_settled");
+  inFlight = postBackground(config, payload).then((outcome) => {
+    inFlight = null;
+    if (!outcome.ok) keepForRetry(config, payload, outcome.status);  // the queue, below
+  });
+
+  // The same settle is the cheapest proof the server might answer this time, so it
+  // also takes one turn at the oldest queued report. Same throttle, one at a time.
+  replayQueuedReport(config, payload.sessionId);
 });
 ```
 
@@ -926,6 +943,54 @@ Guards, all of them required:
 - `AbortSignal.timeout` (default 5000 for settled, 2000 for shutdown).
 - Disabled when `PI_COST_URL` is unset. A Pi session with no dashboard
   configured performs no network work at all.
+- A report the server never took is queued and retried, up to five attempts
+  ("Reports that did not land", below).
+
+### Reports that did not land
+
+A background report used to be fire-and-forget in the strictest sense: nothing read
+the answer, so a 502 from the proxy in front of the dashboard was indistinguishable
+from a session that never reported at all. `postBackground` now resolves
+`{ ok, status, applied, error }`, which is what makes a retry decision possible at
+all — and reading the answer is a decision in itself, because it means parsing the
+body. That parse must not throw: a proxy's 502 page is HTML, and a throw inside the
+response handler leaves the promise unsettled, which leaves `inFlight` set and
+silences every later report for the rest of the process. The status is the answer;
+an unreadable body changes nothing about it.
+
+What happens to a snapshot that did not land is decided by who refused it:
+
+| Outcome | Handling |
+|---|---|
+| No status at all (refused connection, DNS, TLS, timeout) | Queued: nobody read it, so it is owed |
+| 5xx | Queued: a server having a bad day may recover |
+| 4xx | Dropped: the same bytes get the same answer. The server's own reason (`incognito`, `stored_row_conflict`, a validation message) rides in the outcome, so the log names it instead of a bare status |
+| 2xx with `applied: false` | Dropped: the server holds a newer snapshot of that session |
+
+The queue is `~/.pi/agent/extensions/pi-cost-pending.json`, written 0600 like the
+settings file because it holds spending. One entry per session — the newest failed
+snapshot replaces the older one and the attempt count follows the session, because
+the session is the thing that is not getting through — capped at 20 entries with the
+least recently touched dropped, deleted when it empties, and read as empty if it is
+ever corrupt: throwing inside someone's session over a file of numbers is the wrong
+trade.
+
+Retrying is what the no-timers rule constrains. A settle is already happening, and a
+session that just settled is the cheapest available proof that this machine can reach
+its own process again, so each settle that would have reported anyway takes one turn
+at the oldest queued entry — one at a time, so a server that was down a moment ago is
+not hit with twenty simultaneous requests, and paced by the same ten-second report
+throttle, which spreads the five attempts over roughly a quarter of an hour of
+prompting rather than burning them in two minutes of 502s. The session currently
+reporting is skipped: its own attempt was just counted above.
+
+Nothing retries at `session_shutdown`, deliberately. Awaiting the queue there is the
+exit hang this whole section exists to avoid, and firing requests unawaited is
+pointless because process exit kills them. The queue file outlives the process
+instead, so the next session — any session — picks it up. `cli-push.ts` (§14) is the
+repair path for a box that stays closed, or whose queue already gave up: it re-sends
+that machine's own session files through the same endpoint, and the §7 ingest guard
+makes a full re-push safe.
 
 ### Performance budget (measured)
 
@@ -958,13 +1023,15 @@ rollup totals stay exact either way. Listed as a known escape hatch, not impleme
 
 | Failure | Effect on Pi | Handling |
 |---|---|---|
-| Server down | None | request fails, is logged, report skipped; the scan recovers the data |
+| Server down | None | Logged, and the snapshot is queued for a later settle; where files are visible the scan recovers it anyway |
+| Server answers 5xx, HTML included | None | The status is the answer, so the snapshot is queued. A body that will not parse must not throw here — an unsettled promise silences every later report |
 | Server slow | None for prompts | in-flight coalescing blocks further pushes |
 | Slow server at exit (print mode) | up to 2 s once | awaited shutdown report with a 2 s cap |
 | Slow server at exit (terminal or host-driven) | None | socket is unref'd, exit does not wait |
-| Pi killed (`kill -9`) | — | No push. Scan recovers; the file has everything |
+| Pi killed (`kill -9`) | — | No push, and nothing queued either: no handler ran. A scan recovers the file where files are visible; otherwise `cli-push.ts` re-sends it |
 | Extension throws | Pi reports the handler error and continues | Handler bodies are wrapped |
-| Server rejects payload (4xx) | None | Logged to `~/.pi/agent/extensions/pi-cost.log` |
+| Server rejects payload (4xx) | None | Logged to `~/.pi/agent/extensions/pi-cost.log`, and dropped rather than retried |
+| Queue exhausted (five attempts) | None | The entry is dropped and the give-up is logged; `cli-push.ts` is the manual repair |
 | Stale snapshot accepted nowhere | — | Server answers 200 with `applied: false`, so the client does not retry |
 
 ---
@@ -1159,6 +1226,7 @@ pi-cost-dashboard/
 ├── pi-extension/
 │   ├── README.md
 │   ├── pi-cost.ts              # the extension; symlink into ~/.pi/agent/extensions/
+│   ├── cli-push.ts             # CLI: re-send this box's sessions through /api/ingest
 │   ├── tsconfig.json           # type-check against Pi's declarations
 │   └── payload.schema.json     # ingest contract, versioned, also used by server validation
 └── dashboard/
@@ -1277,7 +1345,21 @@ version cannot quietly start shipping transcript data into the database.
 - Reversible from the first migration, so `001_init.sql` includes the DOWN.
 - `cost.db` is a single file, excluded from git, backed up by copying it.
 - `npm run backfill` — full scan, prints a table, safe to re-run (idempotent by
-  `scan_state`).
+  `scan_state`). It reads the *server's* session directory, so in a container that
+  mounts no session files it has nothing to scan.
+- `node --experimental-strip-types pi-extension/cli-push.ts` — run on the **Pi box**,
+  not the server: aggregates that machine's own session files and POSTs them to the
+  configured endpoint, so a box that was offline while the dashboard was down (or a
+  home directory older than the extension) can be filled in without a shared
+  filesystem or direct database access. It goes through the endpoint rather than the
+  database so the §7 ingest guards decide what survives: re-pushing everything cannot
+  overwrite a newer snapshot or resurrect a tombstoned session. `--dry-run`, `--since
+  <YYYY-MM-DD>`, and `--limit <n>` bound a first look; the endpoint and token default
+  to the same saved settings the extension reads — an explicit flag wins over the
+  file, which wins over the environment, and `--token ""` is the deliberate "no
+  token". Exits 1 only when a send never reached the server: a refusal is an answer,
+  so an incognito session is printed with the server's reason and the run still
+  succeeds.
 - `npm run verify` — rescans from the current file state, then checks three things:
   session row count against the number of session files, grand-total cost against the
   sum freshly computed from the files, and each stored rollup against the sum of its own
@@ -1337,6 +1419,12 @@ tracked in `scan_state`, so pushed sessions survive it. Repeated pushes from the
 session update the row, since a push may replace a push; the entry-count guard only
 rejects reports that are older than what is stored.
 
+A third consequence is the one that bites: nothing else can see a Pi box's session files,
+so a report that never arrived leaves a hole the server cannot close by itself. The
+extension's queue (§9) is the first answer and `cli-push.ts` is the second — the latter
+re-sends a box's whole directory through the ingest endpoint, which the guard above makes
+safe to do repeatedly, at any scale, without ever reading a database directly.
+
 ## 15. Test plan
 
 | Level | Checks |
@@ -1353,6 +1441,8 @@ rejects reports that are older than what is stored.
 | Extension perf | Point `PI_COST_URL` at a sink that sleeps 5 s; confirm the next prompt is not delayed, proving the report is not awaited |
 | Extension offline | Point at a dead port; confirm no notification, no error dialog, Pi unaffected |
 | Scanner, push-fed | Scan with no sessions directory returns zeros instead of throwing, and leaves pushed rows in place |
+| Extension, lost reports | A report nobody answered is queued and recovered on a later settle; a 4xx and an `applied: false` are dropped; five attempts then the entry is dropped and the give-up is logged; the queue file is 0600, capped, one entry per session, and gone once empty |
+| Extension, CLI | `cli-push.ts` run as its own process against a live ingest endpoint: a directory of session files becomes rows in the database, attributed to a push, with usage facts attached |
 | Ingest, push-fed | A push may replace a push; a push with fewer entries than the stored row is refused |
 | Token gate | Writes answer 401 without the header, 200 with it; reads answer 200 with no header |
 | LAN day buckets | Same range at `tzOffsetMinutes` 0, +240, and −240: totals identical, day splits differ |

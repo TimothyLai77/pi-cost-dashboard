@@ -11,9 +11,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 
@@ -23,6 +24,7 @@ import { createApp } from "../index.js";
 import { migrateUp, openDatabase } from "../db.js";
 
 const extensionPath = join(import.meta.dirname, "..", "..", "..", "pi-extension", "pi-cost.ts");
+const cliPushPath = join(import.meta.dirname, "..", "..", "..", "pi-extension", "cli-push.ts");
 
 // The extension reads its endpoint, its token, and its log path out of the real Pi directory,
 // resolved from the home directory when the module loads. Point HOME at an empty temporary one
@@ -34,6 +36,7 @@ process.env.HOME = fakeHome;
 process.on("exit", () => rmSync(fakeHome, { recursive: true, force: true }));
 
 const {
+  addPendingReport,
   buildPayload,
   buildSnapshot,
   buildTombstonePayload,
@@ -41,12 +44,17 @@ const {
   default: createExtension,
   effectiveConfig,
   maskSecret,
+  MAX_PENDING_REPORTS,
+  PENDING_GIVE_UP_AFTER,
   postBackground,
+  readPendingReports,
   readSettings,
   requestForProtocol,
   resolveSettingsAction,
   runSettingsAction,
   validateEndpoint,
+  worthRetrying,
+  writePendingReports,
   writeSettings,
 } = await import(extensionPath);
 
@@ -274,6 +282,7 @@ const configFor = (url, token = "test-token") => ({
   shutdownTimeoutMs: 2000,
   token: token || undefined,
   logFile: join(import.meta.dirname, "tmp-postbackground.log"),
+  pendingFile: join(import.meta.dirname, "tmp-postbackground-pending.json"),
 });
 
 test("postBackground delivers a payload over plain HTTP with the token header", async () => {
@@ -823,4 +832,528 @@ test("a tombstone round trip against the real app purges, blocks, and lifts", as
   } finally {
     await stop();
   }
+});
+
+/* ── Reports the server never took ───────────────────────────────────────────── */
+
+/**
+ * Run a block with the extension's home-derived paths pointed at a throwaway directory.
+ *
+ * The endpoint, the log, and the retry queue all hang off the Pi directory, which is resolved
+ * when a config is read rather than when the module loads, so HOME can be swapped back in for one
+ * test. Without this, a test that fails a report would write into the developer's own log.
+ *
+ * @param {(home: string) => Promise<void>} run
+ * @returns {Promise<void>}
+ */
+const withTempHome = async (run) => {
+  const home = mkdtempSync(join(tmpdir(), "pi-cost-extension-home-"));
+  const saved = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    await run(home);
+  } finally {
+    process.env.HOME = saved;
+    rmSync(home, { recursive: true, force: true });
+  }
+};
+
+/** @returns {Promise<number>} a loopback port with nothing listening on it */
+const closedPort = async () => {
+  const probe = createHttpServer(() => {});
+  await new Promise((boot) => probe.listen(0, "127.0.0.1", boot));
+  const { port } = probe.address();
+  await new Promise((done) => probe.close(done));
+  return port;
+};
+
+/**
+ * Poll until `check` is true, because a report that is deliberately not awaited has to fail on
+ * its own schedule.
+ *
+ * @param {() => boolean} check
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+const until = async (check, timeoutMs = 3000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (check()) return true;
+    await new Promise((sleep) => setTimeout(sleep, 25));
+  }
+  return check();
+};
+
+/**
+ * A server that answers every request with a fixed status and body, and records what it was asked
+ * so a test can tell which reports actually arrived.
+ * @param {number} status
+ * @param {string | object} body
+ * @returns {Promise<{ url: string, requests: any[], stop: () => Promise<void> }>}
+ */
+const startAnsweringServer = async (status, body) => {
+  /** @type {any[]} */
+  const requests = [];
+  const server = createHttpServer((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      try {
+        requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      } catch {
+        requests.push(null);
+      }
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(typeof body === "string" ? body : JSON.stringify(body));
+    });
+  });
+  await new Promise((boot) => server.listen(0, "127.0.0.1", boot));
+  return {
+    url: `http://127.0.0.1:${server.address().port}/api/ingest`,
+    requests,
+    stop: () => new Promise((done) => server.close(done)),
+  };
+};
+
+/**
+ * Put the environment a report needs in place and restore it afterwards.
+ * @param {{ url?: string, interval?: string }} values
+ * @param {() => Promise<void>} run
+ * @returns {Promise<void>}
+ */
+const withReportEnv = async (values, run) => {
+  const keys = Object.keys(values);
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) {
+      if (values[key] === undefined) delete process.env[key];
+      else process.env[key] = values[key];
+    }
+    await run();
+  } finally {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+};
+
+// Bounded so a report that never settles fails this test instead of hanging the whole file.
+test("postBackground says what the server answered, so a failure can be kept", { timeout: 15000 }, async () => {
+  /**
+   * @param {number} status
+   * @param {string | object} body
+   * @returns {Promise<object>}
+   */
+  const send = async (status, body) => {
+    const { url, stop } = await startAnsweringServer(status, body);
+    try {
+      return await postBackground(configFor(url), { sessionId: "session-under-test" });
+    } finally {
+      await stop();
+    }
+  };
+
+  assert.deepEqual(await send(201, { ok: true, applied: true }), {
+    ok: true,
+    status: 201,
+    applied: true,
+    error: null,
+  });
+
+  // A snapshot refused as stale is not an error: the server holds better numbers, so nothing is
+  // owed. Reading `applied` is what stops the queue retrying a report that already lost.
+  const stale = await send(200, { ok: true, applied: false });
+  assert.equal(stale.ok, true, "the server answered successfully");
+  assert.equal(stale.applied, false, "and kept the newer row");
+
+  const gateway = await send(502, "<html>Bad Gateway</html>");
+  assert.equal(gateway.ok, false);
+  assert.equal(gateway.status, 502);
+
+  const refused = await send(400, { error: "entryCount must be a number" });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.status, 400);
+  assert.equal(
+    refused.error,
+    "entryCount must be a number",
+    "the server's reason survives, so a log line can repeat it instead of a bare status",
+  );
+
+  // A tombstoned session is refused with 409 `incognito`. Losing that word is how a correct
+  // refusal ends up looking like a broken endpoint.
+  const tombstoned = await send(409, { ok: false, error: "incognito", sessionId: "session-under-test" });
+  assert.equal(tombstoned.ok, false);
+  assert.equal(tombstoned.status, 409);
+  assert.equal(tombstoned.error, "incognito");
+});
+
+test("a report nobody answered is worth retrying, one read and refused is not", async () => {
+  const outcome = await postBackground(configFor("not a url"), { sessionId: "session-under-test" });
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.status, null, "no status, because there was no server");
+  assert.match(outcome.error, /not a valid endpoint/);
+
+  assert.equal(worthRetrying(null), true);
+  assert.equal(worthRetrying(502), true, "a server having a bad day may recover");
+  assert.equal(worthRetrying(400), false, "the same bytes get the same answer");
+  assert.equal(worthRetrying(409), false, "an incognito or conflicting row will not change its mind");
+});
+
+test("the queue keeps one entry per session, counts attempts, and then gives up", () => {
+  const first = addPendingReport([], { sessionId: "a", entryCount: 1 }, "2026-11-08T00:00:00.000Z");
+  assert.equal(first.entries.length, 1);
+  assert.equal(first.entries[0].attempts, 1);
+  assert.deepEqual(first.gaveUp, []);
+
+  // The same session settles again and fails again: the newest snapshot replaces the queued one,
+  // and the attempt count follows the session, which is the thing not getting through.
+  const second = addPendingReport(first.entries, { sessionId: "a", entryCount: 9 }, "2026-11-08T00:01:00.000Z");
+  assert.equal(second.entries.length, 1, "still one entry for the session");
+  assert.equal(second.entries[0].payload.entryCount, 9, "the newest snapshot is the one kept");
+  assert.equal(second.entries[0].attempts, 2);
+
+  let queue = second.entries;
+  const gaveUp = [];
+  for (let attempt = 3; attempt <= PENDING_GIVE_UP_AFTER; attempt += 1) {
+    const next = addPendingReport(queue, { sessionId: "a", entryCount: 10 }, "2026-11-08T00:02:00.000Z");
+    queue = next.entries;
+    gaveUp.push(...next.gaveUp);
+  }
+
+  assert.deepEqual(queue, [], "an exhausted session leaves the queue");
+  assert.equal(gaveUp.length, 1, "and it is reported exactly once, so it can be logged");
+  assert.equal(gaveUp[0].attempts, PENDING_GIVE_UP_AFTER);
+});
+
+test("the queue file is capped, owner-only, and gone once empty", () => {
+  const file = join(tmpdir(), `pi-cost-pending-${process.pid}-${Date.now()}.json`);
+  try {
+    const crowded = Array.from({ length: MAX_PENDING_REPORTS + 5 }, (unused, index) => ({
+      sessionId: `session-${index}`,
+      attempts: 1,
+      updatedAt: "2026-11-08T00:00:00.000Z",
+      payload: { sessionId: `session-${index}` },
+    }));
+    const { entries } = addPendingReport(crowded, { sessionId: "newest" }, "2026-11-08T00:00:01.000Z");
+    assert.equal(entries.length, MAX_PENDING_REPORTS, "the least recently touched make room");
+    assert.equal(entries[entries.length - 1].sessionId, "newest");
+
+    assert.equal(writePendingReports(file, entries), true);
+    assert.equal(statSync(file).mode & 0o777, 0o600, "the queue holds spending, like the token file");
+    assert.equal(readPendingReports(file).length, MAX_PENDING_REPORTS, "and reads back");
+
+    assert.equal(writePendingReports(file, []), true);
+    assert.equal(existsSync(file), false, "an empty queue leaves no file behind");
+
+    writeFileSync(file, "{ not json");
+    assert.deepEqual(readPendingReports(file), [], "a corrupt queue reads as empty rather than throwing");
+  } finally {
+    rmSync(file, { force: true });
+  }
+});
+
+test("a settled report the server never took is queued on the Pi box", async () => {
+  const url = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+
+  await withReportEnv({ PI_COST_URL: url, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+    await withTempHome(async (home) => {
+      const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+      const handlers = installExtension();
+
+      await handlers.get("agent_settled")(undefined, {
+        mode: "rpc",
+        sessionManager: fakeSessionManager("full-usage.jsonl"),
+      });
+
+      assert.ok(
+        await until(() => existsSync(pendingFile)),
+        "a report that reached nobody leaves a queue file",
+      );
+      const [entry] = readPendingReports(pendingFile);
+      assert.equal(
+        entry.sessionId,
+        buildSnapshot(fakeSessionManager("full-usage.jsonl")).sessionId,
+        "the queued report is this session's",
+      );
+      assert.equal(entry.attempts, 1, "the prompt that failed counts as the first attempt");
+      assert.equal(entry.payload.reportedBy, "agent_settled");
+    });
+  });
+});
+
+test("a report the server read and refused is not queued", async () => {
+  const { url, stop } = await startAnsweringServer(400, { error: "entryCount must be a number" });
+
+  await withReportEnv({ PI_COST_URL: url, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+    try {
+      await withTempHome(async (home) => {
+        const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+        const handlers = installExtension();
+
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+
+        await new Promise((wait) => setTimeout(wait, 400));
+        assert.equal(existsSync(pendingFile), false, "the same report gets the same answer twice");
+      });
+    } finally {
+      await stop();
+    }
+  });
+});
+
+// Bounded so a replay that never fires fails with a message instead of hanging the file.
+test("a queued report goes out on a later settle and leaves the queue", { timeout: 20000 }, async () => {
+  const deadUrl = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+  const recovered = await startAnsweringServer(201, { ok: true, applied: true });
+
+  try {
+    await withReportEnv({ PI_COST_URL: deadUrl, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+      await withTempHome(async (home) => {
+        const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+        const handlers = installExtension();
+
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+        assert.ok(await until(() => existsSync(pendingFile)), "the first session's report is queued");
+
+        // The endpoint comes back, and a later session settles. A later session is a fresh
+        // install in reality — Pi builds the extension per process — and the queue file on disk
+        // is what carries the report between them. Its own report goes out as usual; the queued
+        // one rides along on the same settle rather than waiting for a restart nobody is going
+        // to do just to sync numbers.
+        process.env.PI_COST_URL = recovered.url;
+        const laterHandlers = installExtension();
+        await laterHandlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("usage-only.jsonl"),
+        });
+
+        assert.ok(await until(() => !existsSync(pendingFile)), "the recovered report leaves the queue");
+        const queuedSessionId = buildSnapshot(fakeSessionManager("full-usage.jsonl")).sessionId;
+        assert.ok(
+          recovered.requests.map((request) => request.sessionId).includes(queuedSessionId),
+          `the queued report should have reached the server, got ${JSON.stringify(recovered.requests.map((r) => r.sessionId))}`,
+        );
+      });
+    });
+  } finally {
+    await recovered.stop();
+  }
+});
+
+test("a queued report the server read and refused is dropped, not retried", { timeout: 20000 }, async () => {
+  const deadUrl = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+  const refusing = await startAnsweringServer(400, { error: "entryCount must be a number" });
+
+  try {
+    await withReportEnv({ PI_COST_URL: deadUrl, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+      await withTempHome(async (home) => {
+        const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+        const handlers = installExtension();
+
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+        assert.ok(await until(() => existsSync(pendingFile)), "a report that reached nobody is queued");
+
+        process.env.PI_COST_URL = refusing.url;
+        const laterHandlers = installExtension();
+        await laterHandlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("usage-only.jsonl"),
+        });
+
+        assert.ok(
+          await until(() => !existsSync(pendingFile)),
+          "a replay the server read and refused leaves the queue: the same bytes get the same answer",
+        );
+      });
+    });
+  } finally {
+    await refusing.stop();
+  }
+});
+
+test("a report that never lands stops being retried after five attempts", { timeout: 30000 }, async () => {
+  const deadUrl = `http://127.0.0.1:${await closedPort()}/api/ingest`;
+
+  await withReportEnv({ PI_COST_URL: deadUrl, PI_COST_MIN_INTERVAL_MS: "1" }, async () => {
+    await withTempHome(async (home) => {
+      const pendingFile = join(home, ".pi", "agent", "extensions", "pi-cost-pending.json");
+      const logFile = join(home, ".pi", "agent", "extensions", "pi-cost.log");
+      const handlers = installExtension();
+
+      const settle = async () => {
+        await handlers.get("agent_settled")(undefined, {
+          mode: "rpc",
+          sessionManager: fakeSessionManager("full-usage.jsonl"),
+        });
+        // Past the one-millisecond report floor, and enough time for the unawaited send to fail.
+        await new Promise((wait) => setTimeout(wait, 200));
+      };
+
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        await settle();
+      }
+
+      assert.equal(existsSync(pendingFile), false, "an exhausted report stops being carried");
+      const log = readFileSync(logFile, "utf8");
+      assert.match(log, /gave up on session .* after 5 attempts/, "and says so where a user can find it");
+    });
+  });
+});
+
+// The CLI runs as its own process, the way it is used: on a Pi box, with no shared database.
+// What this proves is the second client of the ingest contract — files on disk in, rows in the
+// dashboard out — which the payload tests above only cover for the live extension.
+
+/**
+ * Run `cli-push.ts` as its own process.
+ *
+ * The cost-dashboard endpoint and token are cleared from the inherited environment so a
+ * developer's own `PI_COST_URL` cannot quietly decide what a test saw.
+ *
+ * @param {{ args: string[], home?: string, env?: Record<string, string | undefined> }} options
+ * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
+ */
+const runCliPush = ({ args, home = fakeHome, env = {} }) =>
+  new Promise((done) => {
+    execFile(
+      process.execPath,
+      ["--experimental-strip-types", cliPushPath, ...args],
+      { env: { ...process.env, HOME: home, PI_COST_URL: undefined, PI_COST_TOKEN: undefined, ...env } },
+      (error, stdout, stderr) => done({ code: error?.code ?? 0, stdout, stderr }),
+    );
+  });
+
+test("cli-push sends a directory of session files through the ingest endpoint", { timeout: 60000 }, async () => {
+  const db = openDatabase(":memory:");
+  migrateUp(db);
+  const app = createApp(db, {
+    // No sessions directory on this side, so the dashboard cannot be credited with the rows.
+    sessionsDir: join(fakeHome, "no-sessions"),
+    timeZone: "UTC",
+    scanner: () => ({ enabled: false, reason: "sessions directory not found", fileCount: null }),
+  });
+  const server = await new Promise((boot) => {
+    const listening = app.listen(0, "127.0.0.1", () => boot(listening));
+  });
+
+  try {
+    const run = await runCliPush({
+      args: [
+        "--sessions-dir",
+        fixturesDir,
+        "--url",
+        `http://127.0.0.1:${server.address().port}/api/ingest`,
+        "--token",
+        "",
+      ],
+    });
+
+    assert.equal(run.code, 0, `the CLI exited non-zero: ${run.stdout}${run.stderr}`);
+
+    const files = readdirSync(fixturesDir).filter((name) => name.endsWith(".jsonl"));
+    assert.match(run.stdout, new RegExp(`sent\\s+${files.length} session\\(s\\)`), run.stdout);
+
+    // Two of these fixtures are the same session id — a subagent and the fork made from it —
+    // so five files are four sessions, and the dashboard keys rows on the id.
+    const sessionIds = new Set(
+      files.map((name) => JSON.parse(readFileSync(join(fixturesDir, name), "utf8").split("\n")[0]).id),
+    );
+
+    const rows = db.prepare("SELECT session_id, entry_count, last_source FROM sessions").all();
+    assert.equal(rows.length, sessionIds.size, "every session in the directory landed in the dashboard's database");
+    assert.ok(rows.every((row) => row.last_source === "push"), "and each is attributed to a push");
+
+    const usageFacts = db.prepare("SELECT COUNT(*) AS n FROM usage_events").get().n;
+    assert.ok(usageFacts > 0, "the pushed sessions carry their usage facts, not just rollups");
+  } finally {
+    await new Promise((done) => server.close(done));
+    db.close();
+  }
+});
+
+// The order the CLI documents — flag, then saved settings, then environment — is easy to break
+// with an object spread, and breaking it silently is the worst version: a settings file with no
+// token key used to be read as "saved: no token", so every report went out unauthenticated, each
+// 401 was counted as a refusal the server had answered, and the run still exited 0.
+test("cli-push resolves its endpoint and token from flag, then settings, then environment", { timeout: 60000 }, async () => {
+  const homeWithUrlOnly = mkdtempSync(join(tmpdir(), "pi-cost-cli-home-"));
+  const homeWithNothing = mkdtempSync(join(tmpdir(), "pi-cost-cli-home-"));
+  const extensionsDir = join(homeWithUrlOnly, ".pi", "agent", "extensions");
+  mkdirSync(extensionsDir, { recursive: true });
+  writeFileSync(
+    join(extensionsDir, "pi-cost.json"),
+    JSON.stringify({ url: "https://settings-file.invalid/api/ingest" }),
+  );
+
+  const urlOnlyFromSettings = ["--dry-run", "--sessions-dir", fixturesDir];
+  const envWithToken = {
+    PI_COST_URL: "http://127.0.0.1:9/api/ingest",
+    PI_COST_TOKEN: "token-from-the-environment",
+  };
+
+  try {
+    // One assertion proves both orders at once: the saved URL beats the environment's, and
+    // the environment's token is still used because the settings file never mentions a token.
+    const savedUrlEnvToken = await runCliPush({ args: urlOnlyFromSettings, home: homeWithUrlOnly, env: envWithToken });
+    assert.match(
+      savedUrlEnvToken.stdout,
+      /endpoint\s+https:\/\/settings-file\.invalid\/api\/ingest \(with token\)/,
+      `the saved endpoint wins and the environment token is still used: ${savedUrlEnvToken.stdout}`,
+    );
+
+    const clearWithFlag = await runCliPush({
+      args: [...urlOnlyFromSettings, "--token", ""],
+      home: homeWithUrlOnly,
+      env: envWithToken,
+    });
+    assert.doesNotMatch(
+      clearWithFlag.stdout,
+      /\(with token\)/,
+      '--token "" stays the deliberate "no token", overriding the environment',
+    );
+
+    const environmentOnly = await runCliPush({ args: urlOnlyFromSettings, home: homeWithNothing, env: envWithToken });
+    assert.match(
+      environmentOnly.stdout,
+      /endpoint\s+http:\/\/127\.0\.0\.1:9\/api\/ingest \(with token\)/,
+      `with no settings file the environment supplies both: ${environmentOnly.stdout}`,
+    );
+
+    const noTokenAnywhere = await runCliPush({
+      args: [...urlOnlyFromSettings, "--url", "http://127.0.0.1:9/api/ingest"],
+      home: homeWithNothing,
+    });
+    assert.doesNotMatch(noTokenAnywhere.stdout, /\(with token\)/, "no token anywhere means no token header");
+  } finally {
+    rmSync(homeWithUrlOnly, { recursive: true, force: true });
+    rmSync(homeWithNothing, { recursive: true, force: true });
+  }
+});
+
+// Every one of these would otherwise default to the most dangerous answer this command has:
+// an unset limit means the whole directory, and a swallowed flag means an empty token.
+test("cli-push refuses an argument it cannot read instead of guessing", { timeout: 60000 }, async () => {
+  const readable = ["--dry-run", "--sessions-dir", fixturesDir, "--url", "http://127.0.0.1:9/api/ingest"];
+
+  const limitWithoutValue = await runCliPush({ args: [...readable, "--limit"] });
+  assert.equal(limitWithoutValue.code, 1, "a --limit with nothing after it must not mean 'no limit'");
+  assert.match(limitWithoutValue.stderr, /--limit needs its value/);
+
+  const flagEatingFlag = await runCliPush({ args: [...readable, "--token", "--dry-run"] });
+  assert.equal(flagEatingFlag.code, 1, "--token must not swallow the next flag as its value");
+  assert.match(flagEatingFlag.stderr, /--token needs its value/);
+
+  const equalsForm = await runCliPush({ args: [...readable, "--limit=2"] });
+  assert.equal(equalsForm.code, 1, "--limit=2 is not a spelling this command reads");
+  assert.match(equalsForm.stderr, /I do not understand "--limit=2"/);
 });

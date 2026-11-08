@@ -274,7 +274,7 @@ test("getFilters lists projects and providers for the controls", () => {
 
 test("getHealth reports counts, schema version, and last scan", () => {
   const db = seededDb();
-  const health = getHealth(db, "/tmp/sessions", 2);
+  const health = getHealth(db, "/tmp/sessions", { enabled: true, reason: null, fileCount: 2 });
 
   assert.equal(health.status, "ok");
   assert.equal(health.sessionCount, 2);
@@ -282,6 +282,21 @@ test("getHealth reports counts, schema version, and last scan", () => {
   assert.equal(health.schemaVersion, currentVersion(db), "the applied migration version");
   assert.equal(health.sessionFilesOnDisk, 2);
   assert.equal(health.lastScanAt, null, "no scan_state rows in a seeded database");
+  assert.deepEqual(health.scanner, { enabled: true, reason: null }, "the scanner can see its files");
+  db.close();
+});
+
+test("getHealth says a push-fed deployment has no scanner, instead of nulling everything", () => {
+  const db = seededDb();
+  const health = getHealth(db, "/app/no-sessions", {
+    enabled: false,
+    reason: "sessions directory not found",
+    fileCount: null,
+  });
+
+  assert.deepEqual(health.scanner, { enabled: false, reason: "sessions directory not found" });
+  assert.equal(health.sessionFilesOnDisk, null, "not looked is not reported as zero files");
+  assert.equal(health.sessionCount, 2, "pushed rows are still the ledger, and still counted");
   db.close();
 });
 
@@ -414,7 +429,12 @@ test("getLifetimeStats groups days on the zone it is given", () => {
  * @returns {Promise<void>}
  */
 const withServer = async (db, block, timeZone = null) => {
-  const app = createApp(db, { sessionsDir: "/tmp/sessions", rescan: () => ({ scanned: 0 }), timeZone });
+  const app = createApp(db, {
+    sessionsDir: "/tmp/sessions",
+    rescan: () => ({ scanned: 0 }),
+    scanner: () => ({ enabled: true, reason: null, fileCount: 2 }),
+    timeZone,
+  });
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   const { port } = server.address();
@@ -433,6 +453,8 @@ test("GET /api/health responds with the database state", async () => {
     const body = await response.json();
     assert.equal(body.sessionCount, 2);
     assert.equal(body.sessionsDir, "/tmp/sessions");
+    assert.deepEqual(body.scanner, { enabled: true, reason: null });
+    assert.equal(body.sessionFilesOnDisk, 2, "a reachable directory is counted, not left null");
   });
   db.close();
 });

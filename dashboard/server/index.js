@@ -36,7 +36,7 @@ import {
   getSummary,
 } from "./queries.js";
 import { isSupportedTimeZone, offsetLabel, utcOffsetMinutes } from "./timezone.js";
-import { resolveSessionsDir, scanSessions } from "./scanner/scan.js";
+import { resolveSessionsDir, scanSessions, scannerStatus } from "./scanner/scan.js";
 
 /** Seconds between background rescans of the sessions directory. @type {number} */
 const RESCAN_INTERVAL_SECONDS = 60;
@@ -142,10 +142,10 @@ const requireIntegers = (names) => (req, res, next) => {
  * @param {{
  *   sessionsDir: string,
  *   rescan: () => object,
- *   fileCount?: () => number,
+ *   scanner?: () => { enabled: boolean, reason: string | null, fileCount: number | null },
  *   timeZone?: string | null,
- * }} dependencies `rescan` backs POST /api/rescan; `timeZone` is the zone every bucket is
- *   drawn in, null for UTC
+ * }} dependencies `rescan` backs POST /api/rescan; `scanner` describes what the scanner can see
+ *   for `/api/health`; `timeZone` is the zone every bucket is drawn in, null for UTC
  * @returns {import("express").Express}
  */
 export const createApp = (db, dependencies) => {
@@ -165,7 +165,7 @@ export const createApp = (db, dependencies) => {
   };
 
   app.get("/api/health", (_req, res) => {
-    res.json(getHealth(db, dependencies.sessionsDir, dependencies.fileCount?.()));
+    res.json(getHealth(db, dependencies.sessionsDir, dependencies.scanner?.()));
   });
 
   // What the server buckets by, so the page can label its own numbers. There is no
@@ -370,7 +370,15 @@ export const listen = (options = {}) => {
     console.warn(`PI_COST_TZ "${requestedZone}" is not a timezone this Node can resolve; charting in UTC`);
   }
 
-  const app = createApp(db, { sessionsDir, rescan: () => runScan(true), timeZone });
+  const app = createApp(db, {
+    sessionsDir,
+    rescan: () => runScan(true),
+    timeZone,
+    // Counted per health check instead of cached: the Docker healthcheck polls every 30 seconds,
+    // the walk is a few milliseconds over a few hundred files, and a stale count is worse than a
+    // live one.
+    scanner: () => scannerStatus(sessionsDir),
+  });
 
   const port = options.port ?? Number(process.env.PI_COST_PORT ?? DEFAULT_PORT);
   const host = options.host ?? process.env.PI_COST_HOST ?? DEFAULT_HOST;

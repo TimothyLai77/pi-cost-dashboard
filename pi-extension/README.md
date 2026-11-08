@@ -77,7 +77,45 @@ anything running Pi in-process — ThinkRail and the other host-driven clients. 
 `print` and `json` runs stay silent, because a request still in flight would hold their exit
 open, and in a deployment that scans session files the scanner picks their files up seconds
 later. In a push-fed deployment — the container scans nothing — the report at session exit is
-what puts a print-mode session on the dashboard, so run it with `PI_COST_URL` set.
+what puts a print-mode session on the dashboard, so run it with `PI_COST_URL` set. When a
+report fails outright, see below.
+
+## When a report does not land
+
+An automatic report must not stall a prompt, so nothing used to wait for the answer — which
+meant a dashboard behind a bad proxy looked exactly like a session that never reported. Each
+send's answer is read now, and a snapshot the server never took is kept on the Pi box in
+`~/.pi/agent/extensions/pi-cost-pending.json` (mode 0600, one entry per session, capped at
+20, deleted once empty):
+
+| What the server did | What happens to the snapshot |
+|---|---|
+| Nobody answered, or a 5xx | Queued, then retried on a later settle — five attempts in all, counting the prompt that failed |
+| A 4xx, or `applied: false` | Dropped: the same bytes get the same answer, and `applied: false` means the server is holding a newer snapshot. A 4xx prints the server's reason — `incognito`, `stored_row_conflict` — so a refusal is readable |
+
+Retries ride on your later prompts, one queued report at a time, spaced by the same
+ten-second report throttle. Pi forbids timers in an extension, so a settle that already
+happened is the cheapest proof the server might answer this time. Nothing is retried at
+exit: awaiting the queue there is the exit hang this extension exists to avoid, and an
+unawaited request is killed by the exit anyway — the queue just waits for the next
+session. Five failed attempts drops the entry and logs the give-up with the session id to
+`pi-cost.log`.
+
+To repair a gap yourself — a laptop that was offline for a week, or a queue that already
+gave up — run `cli-push.ts` **on the Pi box**, from a checkout of this repo:
+
+```bash
+node --experimental-strip-types pi-extension/cli-push.ts --dry-run   # what would go
+node --experimental-strip-types pi-extension/cli-push.ts             # send it
+```
+
+It reads that machine's own session files and sends them to the endpoint you already
+configured (`--url` and `--token` override the saved settings; `--since YYYY-MM-DD` and
+`--limit n` bound a run). It goes through the ingest endpoint rather than the database on purpose, so the
+server still decides what survives: re-pushing everything cannot overwrite a newer
+snapshot of a session and cannot bring back one you put in incognito. Refusals print
+with the server's reason and still exit 0 — the command exits 1 only when a report never
+reached the server at all.
 
 ## Incognito mode
 
@@ -151,6 +189,7 @@ tombstones carry no new contract surface for report payloads.
 | File | Purpose |
 |---|---|
 | `pi-cost.ts` | The extension |
+| `cli-push.ts` | CLI for the Pi box: re-sends that machine's own session files to the dashboard. Not an extension — do not install it in `~/.pi/agent/extensions/` |
 | `payload.schema.json` | Ingest contract, shared with the server |
 | `tombstone.schema.json` | Incognito tombstone contract, version 3 |
 | `tsconfig.json` | Type-check dialect for Pi's real declarations — carries no machine paths; the Pi location is injected by the script |
