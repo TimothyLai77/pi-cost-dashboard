@@ -846,9 +846,25 @@ test("the server's configured zone drives the charts and is reported by /api/con
     const config = await (await fetch(`${base}/api/config`)).json();
     assert.equal(config.timezone, "America/Denver");
     assert.equal(config.timezoneSource, "env");
-    // October in Denver is daylight time, UTC-6.
-    assert.equal(config.offsetLabel, "UTC-6");
-    assert.equal(config.utcOffsetMinutes, -360);
+    // /api/config reports the offset in force as the request is served, and Denver's is not a
+    // constant: UTC-6 in daylight time, UTC-7 in standard. Read from the operating system for
+    // that same instant rather than hardcoded to a season — the hardcoded expectation went red
+    // the day daylight saving ended, and would have gone green again in the spring. Only a
+    // request straddling the transition instant could disagree, and that instant arrives twice
+    // a year.
+    const denverOffsets = { "GMT-6": -360, "GMT-7": -420 };
+    const denverNow = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Denver",
+      timeZoneName: "shortOffset",
+    })
+      .formatToParts(new Date())
+      .find((part) => part.type === "timeZoneName").value;
+    assert.ok(
+      Object.hasOwn(denverOffsets, denverNow),
+      `the operating system reported an offset Denver never has: ${denverNow}`,
+    );
+    assert.equal(config.offsetLabel, denverNow.replace("GMT", "UTC"));
+    assert.equal(config.utcOffsetMinutes, denverOffsets[denverNow]);
   }, "America/Denver");
 
   await withServer(db, async (base) => {
