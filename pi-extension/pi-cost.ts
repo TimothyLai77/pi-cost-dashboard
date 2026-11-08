@@ -552,7 +552,7 @@ export interface PostOutcome {
  * is what sent someone to reproduce a 422 by hand to learn which event was refused, so the
  * detail rides along in the log line.
  *
- * Exported so a test can pin all three shapes.
+ * Exported so a test can pin every shape the server and a proxy in front of it answer with.
  *
  * @param {Record<string, any>} body Parsed response body
  * @param {string} fallback What to say when the body carries nothing readable

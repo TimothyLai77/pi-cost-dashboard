@@ -271,6 +271,22 @@ test("cost components that do not add up to the cost are refused", () => {
   assert.equal(shortTotals.ok, false, "the totals the client derived no longer match its events");
   assert.equal(shortTotals.field, "totals.costMicros");
 
+  // Zeroing the session's split while its events report one is a client inventing its rollup,
+  // not a provider that bills in wholes: an absent split at session level has to be explained
+  // by absent splits at event level.
+  const zeroedTotals = validateIngestPayload({
+    ...payload,
+    totals: {
+      ...payload.totals,
+      costInputMicros: 0,
+      costOutputMicros: 0,
+      costCacheReadMicros: 0,
+      costCacheWriteMicros: 0,
+    },
+  });
+  assert.equal(zeroedTotals.ok, false, "a session split of zero against events that report parts");
+  assert.equal(zeroedTotals.field, "totals.costMicros");
+
   // Each component is rounded on its own, so a session's parts can land a couple of
   // micro-dollars away from its whole. That much is allowed; a client that is off by a
   // cent is not.

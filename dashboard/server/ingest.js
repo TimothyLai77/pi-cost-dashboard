@@ -13,10 +13,10 @@
  *     trusted with a number the dashboard would display as fact.
  *
  * The third kind of check is new in version 2: where a client reports a split, the four cost
- * components must add up to the total they are reported next to, per event and per session. A
- * split that is entirely zero beside a real cost is an unknown split rather than a broken
- * client — some providers bill only a whole — and the whole session is not lost over it.
- * DESIGN.md §4 owns why.
+ * components must add up to what they are reported against — an event's parts to its own
+ * total, a session's parts to the parts its events report. A split that is entirely zero
+ * beside a real cost is an unknown split rather than a broken client — some providers bill
+ * only a whole — and the whole session is not lost over it. DESIGN.md §4 owns why.
  *
  * Version 3 is a second payload shape, not a snapshot revision: the incognito tombstone.
  * It carries a session UUID and a boolean, routes around every snapshot check, and
@@ -323,8 +323,9 @@ export const validateIngestPayload = (body) => {
   // A session's split is held to the same sum-of-events rule as its cost and tokens, rather
   // than to its own whole: an event that reports no split leaves its cost out of the split at
   // both levels, which is what keeps one unattributed call from refusing the whole session.
+  // A session that reports no split at all passes by the same arithmetic, 0 against 0.
   const totalsComponents = COST_COMPONENT_KEYS.reduce((sum, key) => sum + totals[key], 0);
-  if (totalsComponents > 0 && Math.abs(totalsComponents - eventComponentsTotal) > componentTolerance(body.events.length)) {
+  if (Math.abs(totalsComponents - eventComponentsTotal) > componentTolerance(body.events.length)) {
     return reject(
       "totals.costMicros",
       `cost components must add up to the components its events report (components sum to ${totalsComponents}, events report ${eventComponentsTotal})`,
